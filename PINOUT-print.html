@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ESP32-C5 CAN FD Gateway Pinout</title>
+<style>
+  @page { size: A4; margin: 16mm 15mm 17mm; }
+  :root { color: #17212b; --navy: #123047; --teal: #087f8c; --line: #c9d7dc; --pale: #edf6f7; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", Arial, sans-serif; font-size: 10.5pt; line-height: 1.38; margin: 0; color: #17212b; }
+  h1 { color: var(--navy); font-size: 25pt; margin: 0 0 3mm; letter-spacing: .2pt; }
+  h2 { color: var(--teal); font-size: 15pt; margin: 8mm 0 3mm; border-bottom: 2px solid var(--teal); padding-bottom: 1.5mm; }
+  p { margin: 0 0 3mm; }
+  .subtitle { color: #526773; font-size: 11pt; margin-bottom: 8mm; }
+  .callout { background: var(--pale); border-left: 4px solid var(--teal); padding: 3mm 4mm; margin: 4mm 0 5mm; }
+  table { border-collapse: collapse; width: 100%; margin: 2mm 0 4mm; page-break-inside: avoid; }
+  th { background: var(--navy); color: white; text-align: left; font-weight: 600; }
+  th, td { border: 1px solid var(--line); padding: 2.2mm 2.5mm; vertical-align: top; }
+  tr:nth-child(even) td { background: #f5f8f9; }
+  code { font-family: Consolas, "Courier New", monospace; background: #eef2f3; padding: .2mm 1mm; }
+  pre { background: #17212b; color: #e5f4f5; border-radius: 2mm; padding: 4mm; font-family: Consolas, "Courier New", monospace; font-size: 9pt; line-height: 1.5; page-break-inside: avoid; }
+  .footer { margin-top: 9mm; padding-top: 3mm; border-top: 1px solid var(--line); color: #60737d; font-size: 8.5pt; }
+</style>
+</head>
+<body>
+<h1>ESP32-C5 CAN FD Gateway</h1>
+<p class="subtitle">Hardware pinout and wiring reference | GPIO numbers refer to the ESP32-C5 chip, not physical development-board pin numbers.</p>
+<div class="callout"><strong>Important:</strong> Check the development-board schematic before wiring. The ESP32-C5 TWAI pins are logic-level controller signals and must connect through external CAN FD transceivers.</div>
+
+<h2>Active Connections</h2>
+<table>
+<tr><th>Function</th><th>ESP32-C5 GPIO</th><th>Direction</th><th>Connection</th></tr>
+<tr><td>I2C SDA</td><td><code>GPIO0</code></td><td>Bidirectional</td><td>OLED, DS3231MZ, and PCF8574 SDA</td></tr>
+<tr><td>I2C SCL</td><td><code>GPIO1</code></td><td>Output</td><td>OLED, DS3231MZ, and PCF8574 SCL</td></tr>
+<tr><td>CAN node 1 TX</td><td><code>GPIO4</code></td><td>Output</td><td>Transceiver 1 TXD / TX input</td></tr>
+<tr><td>CAN node 1 RX</td><td><code>GPIO5</code></td><td>Input</td><td>Transceiver 1 RXD / RX output</td></tr>
+<tr><td>CAN node 2 TX</td><td><code>GPIO23</code></td><td>Output</td><td>Transceiver 2 TXD / TX input</td></tr>
+<tr><td>CAN node 2 RX</td><td><code>GPIO24</code></td><td>Input</td><td>Transceiver 2 RXD / RX output</td></tr>
+</table>
+
+<h2>I2C Devices</h2>
+<p>All devices share GPIO0/GPIO1 and require compatible 3.3 V logic levels.</p>
+<table>
+<tr><th>Device</th><th>I2C address</th><th>Bus speed</th><th>Required signals</th></tr>
+<tr><td>OLED</td><td><code>0x3C</code></td><td>Up to 400 kHz</td><td>SDA, SCL, 3.3 V, GND</td></tr>
+<tr><td>DS3231MZ</td><td><code>0x68</code></td><td>400 kHz</td><td>SDA, SCL, 3.3 V, GND</td></tr>
+<tr><td>PCF8574</td><td><code>0x20</code></td><td>400 kHz</td><td>SDA, SCL, 3.3 V, GND</td></tr>
+</table>
+<p>The application enables the ESP32-C5 internal I2C pull-ups. External pull-ups appropriate for the bus capacitance are recommended for reliable 400 kHz operation.</p>
+
+<h2>CAN Bus Wiring</h2>
+<pre>ESP32-C5 CAN1 TX (GPIO4)  -&gt; Transceiver 1 TXD
+ESP32-C5 CAN1 RX (GPIO5)  &lt;- Transceiver 1 RXD
+Transceiver 1 CANH/CANL   &lt;-&gt; CAN bus 1
+
+ESP32-C5 CAN2 TX (GPIO23) -&gt; Transceiver 2 TXD
+ESP32-C5 CAN2 RX (GPIO24) &lt;- Transceiver 2 RXD
+Transceiver 2 CANH/CANL   &lt;-&gt; CAN bus 2</pre>
+<p>Connect ESP32-C5 and transceiver grounds together. Use 3.3 V-compatible transceivers unless level shifting is provided. Install 120 ohm termination at the two physical ends of each CAN bus, not at every node. Confirm that the transceiver supports CAN FD at the configured 5 Mbit/s data phase.</p>
+
+<h2>CAN Configuration</h2>
+<table>
+<tr><th>Channel</th><th>TX</th><th>RX</th><th>Arbitration</th><th>Data phase</th></tr>
+<tr><td>Node 1</td><td>GPIO4</td><td>GPIO5</td><td>1 Mbit/s</td><td>5 Mbit/s</td></tr>
+<tr><td>Node 2</td><td>GPIO23</td><td>GPIO24</td><td>1 Mbit/s</td><td>5 Mbit/s</td></tr>
+</table>
+<p>Both channels use CAN FD frames with bit-rate switching enabled. The firmware expects an FD-capable bus and transceiver.</p>
+
+<h2>Optional SD-Card Mapping</h2>
+<p>The <code>sdcard_service</code> component defines this default SPI mapping, but the current application does not initialize or mount the SD card. Treat these signals as reserved for future integration.</p>
+<table>
+<tr><th>SD-card SPI signal</th><th>ESP32-C5 GPIO</th></tr>
+<tr><td>MOSI</td><td>GPIO8</td></tr>
+<tr><td>MISO</td><td>GPIO9</td></tr>
+<tr><td>SCLK</td><td>GPIO10</td></tr>
+<tr><td>CS</td><td>GPIO6</td></tr>
+</table>
+<p>Do not connect another peripheral to these pins if SD-card support may be enabled later without checking the board design and SPI host settings.</p>
+
+<div class="footer">Source: PINOUT.md | Project: ESP32-C5 CAN FD Gateway | Generated for hardware documentation</div>
+</body>
+</html>

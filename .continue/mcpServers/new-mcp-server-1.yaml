@@ -1,0 +1,36 @@
+name: Main Config
+version: 1.0.0
+schema: v1
+mcpServers:
+  - name: "kb-manager"
+    command: "C:/Users/smuks/AppData/Local/Programs/Python/Python313/python.exe"
+    args:
+      - "C:/Users/smuks/Desktop/TestAi/mcp_server/kb_server.py"
+    cwd: "C:/Users/smuks/Desktop/TestAi"
+
+  - name: "espressif-local"
+    command: "C:/Users/smuks/AppData/Local/Programs/Python/Python313/python.exe"
+    args:
+      - "C:/esp_mcp/esp_mcp_server.py"
+    cwd: "C:/esp_mcp"
+
+rules:
+  - "When an MCP tool can complete the user request, call the tool instead of only describing what to do."
+  - "For save or note requests, prefer kb-manager tool save_summary and execute it in this turn."
+  - "For Espressif, ESP32, or hardware questions, prefer espressif-local tools and execute them."
+models:
+  - name: Qwen3 
+    provider: lmstudio
+    apiBase: http://localhost:1234/v1
+    defaultCompletionOptions:
+      maxTokens: 15000
+    model:  kikocis/qwen3-coder-30b-a3b-instruct
+    
+    capabilities:
+      - tool_use
+    roles:
+      - autocomplete 
+      - chat
+      - edit
+      - apply
+      - embed
