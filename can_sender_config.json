@@ -1,0 +1,17 @@
+{
+    "clock": "80",
+    "nom_mbps": "0.5",
+    "data_mbps": "2",
+    "n_brp": "4",
+    "n_tseg1": "31",
+    "n_tseg2": "8",
+    "n_sjw": "4",
+    "d_brp": "2",
+    "d_tseg1": "15",
+    "d_tseg2": "4",
+    "d_sjw": "4",
+    "gen_count": "100000",
+    "gen_interval": "0.5",
+    "gen_dlc": "16",
+    "last_csv": "C:/Users/smuks/Downloads/CAN-FD_Intrusion_Dataset (1)/CAN-FD_Intrusion_Dataset/CANFD_Flooding.csv"
+}

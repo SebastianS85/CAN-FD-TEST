@@ -2,23 +2,30 @@
 
 #include <stdio.h>
 #include <string.h>
-
+#include <sys/unistd.h>
 #include "driver/sdspi_host.h"
 #include "driver/spi_common.h"
+#include "driver/gpio.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "sdcard_service";
 
-static bool s_mounted;
+static bool s_mounted = false;
 static int s_host_id = -1;
-static sdmmc_card_t *s_card;
+static sdmmc_card_t *s_card = NULL;
 static char s_mount_point[32] = "/sdcard";
-static FILE *s_append_file;
-static char s_append_path[96];
+static FILE *s_append_file = NULL;
+static char s_append_path[96] = {0};
+static SemaphoreHandle_t s_sd_mutex = NULL;
+
+// Bufor RAM do optymalizacji zapisu strumieniowego dla plików tekstowych
+#define SD_FILE_BUFFER_SIZE 512
+static char s_file_buffer[SD_FILE_BUFFER_SIZE];
 
 static esp_err_t build_full_path(const char *relative_path, char *full_path, size_t full_path_len)
 {
@@ -43,22 +50,34 @@ esp_err_t sdcard_service_mount(const sdcard_service_config_t *config, sdmmc_card
         return ESP_OK;
     }
 
-   
-    vTaskDelay(pdMS_TO_TICKS(100));
+    if (s_sd_mutex == NULL) {
+        s_sd_mutex = xSemaphoreCreateMutex();
+        ESP_RETURN_ON_FALSE(s_sd_mutex != NULL, ESP_ERR_NO_MEM, TAG, "Failed to create SD mutex");
+    }
 
+    // Wymuszenie sprzętowych rezystorów Pull-Up
+    gpio_set_pull_mode(config->pin_mosi, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(config->pin_miso, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(config->pin_sclk, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(config->pin_cs, GPIO_PULLUP_ONLY);
+    vTaskDelay(pdMS_TO_TICKS(10));
+
+    // Inicjalizacja magistrali SPI (z włączonym DMA!)
     spi_bus_config_t bus_cfg = {
         .mosi_io_num = config->pin_mosi,
         .miso_io_num = config->pin_miso,
         .sclk_io_num = config->pin_sclk,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
-        .max_transfer_sz = config->max_transfer_sz,
+        .max_transfer_sz = 4000, 
     };
 
     ESP_RETURN_ON_ERROR(spi_bus_initialize(config->host_id, &bus_cfg, SDSPI_DEFAULT_DMA), TAG, "spi_bus_initialize failed");
 
+    // Konfiguracja hosta
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = config->host_id;
+    host.unaligned_multi_block_rw_max_chunk_size = 8; 
 
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_config.host_id = config->host_id;
@@ -75,6 +94,7 @@ esp_err_t sdcard_service_mount(const sdcard_service_config_t *config, sdmmc_card
     sdmmc_card_t *card = NULL;
     esp_err_t err = esp_vfs_fat_sdspi_mount(config->mount_point, &host, &slot_config, &mount_cfg, &card);
     if (err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_vfs_fat_sdspi_mount failed: %s (0x%x)", esp_err_to_name(err), err);
         spi_bus_free(config->host_id);
         return err;
     }
@@ -100,10 +120,13 @@ esp_err_t sdcard_service_unmount(void)
         return ESP_OK;
     }
 
-    if (s_append_file != NULL) {
-        fclose(s_append_file);
-        s_append_file = NULL;
-        s_append_path[0] = '\0';
+    if (xSemaphoreTake(s_sd_mutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        if (s_append_file != NULL) {
+            fclose(s_append_file);
+            s_append_file = NULL;
+            s_append_path[0] = '\0';
+        }
+        xSemaphoreGive(s_sd_mutex);
     }
 
     esp_vfs_fat_sdcard_unmount(s_mount_point, s_card);
@@ -123,11 +146,20 @@ esp_err_t sdcard_service_write_text(const char *relative_path, const char *text)
     char path[96];
     ESP_RETURN_ON_ERROR(build_full_path(relative_path, path, sizeof(path)), TAG, "invalid path");
 
+    if (xSemaphoreTake(s_sd_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
     FILE *f = fopen(path, "w");
-    ESP_RETURN_ON_FALSE(f != NULL, ESP_FAIL, TAG, "fopen for write failed");
+    if (f == NULL) {
+        xSemaphoreGive(s_sd_mutex);
+        ESP_LOGE(TAG, "fopen for write failed: %s", path);
+        return ESP_FAIL;
+    }
 
     fputs(text, f);
     fclose(f);
+    xSemaphoreGive(s_sd_mutex);
     return ESP_OK;
 }
 
@@ -139,18 +171,85 @@ esp_err_t sdcard_service_append_text(const char *relative_path, const char *text
     char path[96];
     ESP_RETURN_ON_ERROR(build_full_path(relative_path, path, sizeof(path)), TAG, "invalid path");
 
+    if (xSemaphoreTake(s_sd_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
     if (s_append_file == NULL || strcmp(s_append_path, path) != 0) {
         if (s_append_file != NULL) {
             fclose(s_append_file);
+            s_append_file = NULL;
         }
 
         s_append_file = fopen(path, "a");
-        ESP_RETURN_ON_FALSE(s_append_file != NULL, ESP_FAIL, TAG, "fopen for append failed");
+        if (s_append_file == NULL) {
+            xSemaphoreGive(s_sd_mutex);
+            ESP_LOGE(TAG, "fopen for append failed: %s", path);
+            return ESP_FAIL;
+        }
+
+        setvbuf(s_append_file, s_file_buffer, _IOFBF, sizeof(s_file_buffer));
         strlcpy(s_append_path, path, sizeof(s_append_path));
     }
 
-    ESP_RETURN_ON_FALSE(fputs(text, s_append_file) >= 0, ESP_FAIL, TAG, "append write failed");
-    ESP_RETURN_ON_FALSE(fflush(s_append_file) == 0, ESP_FAIL, TAG, "append flush failed");
+    // POPRAWKA: Usunięto sprzętowe wymuszanie zapisu (fflush) po każdym fputs,
+    // co zapobiega ciągłemu katowaniu karty SD i drastycznie zwiększa wydajność.
+    if (fputs(text, s_append_file) < 0) {
+        fclose(s_append_file);
+        s_append_file = NULL;
+        s_append_path[0] = '\0';
+        xSemaphoreGive(s_sd_mutex);
+        return ESP_FAIL;
+    }
+
+    xSemaphoreGive(s_sd_mutex);
+    return ESP_OK;
+}
+
+// NOWA FUNKCJA: Superszybki, surowy zapis binarny bloków (np. 4 KB)
+esp_err_t sdcard_service_append_bin_block(const char *relative_path, const void *data, size_t size)
+{
+    ESP_RETURN_ON_FALSE(s_mounted, ESP_ERR_INVALID_STATE, TAG, "sdcard not mounted");
+    ESP_RETURN_ON_FALSE(data != NULL && size > 0, ESP_ERR_INVALID_ARG, TAG, "invalid data");
+
+    char path[96];
+    ESP_RETURN_ON_ERROR(build_full_path(relative_path, path, sizeof(path)), TAG, "invalid path");
+
+    if (xSemaphoreTake(s_sd_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    // Otwieramy w trybie binarnego dopisywania ("ab")
+    if (s_append_file == NULL || strcmp(s_append_path, path) != 0) {
+        if (s_append_file != NULL) {
+            fclose(s_append_file);
+            s_append_file = NULL;
+        }
+
+        s_append_file = fopen(path, "ab");
+        if (s_append_file == NULL) {
+            xSemaphoreGive(s_sd_mutex);
+            ESP_LOGE(TAG, "fopen for binary append failed: %s", path);
+            return ESP_FAIL;
+        }
+        
+        // Zapisujemy ścieżkę, aby unikać wielokrotnego otwierania pliku
+        strlcpy(s_append_path, path, sizeof(s_append_path));
+    }
+
+    // Bezpośredni strumień binarny DMA na kartę
+    size_t written = fwrite(data, 1, size, s_append_file);
+    
+    if (written != size) {
+        ESP_LOGE(TAG, "Failed to write binary block (wrote %u / %u bytes)", written, size);
+        fclose(s_append_file);
+        s_append_file = NULL;
+        s_append_path[0] = '\0';
+        xSemaphoreGive(s_sd_mutex);
+        return ESP_FAIL;
+    }
+
+    xSemaphoreGive(s_sd_mutex);
     return ESP_OK;
 }
 
@@ -162,12 +261,20 @@ esp_err_t sdcard_service_read_text(const char *relative_path, char *buffer, size
     char path[96];
     ESP_RETURN_ON_ERROR(build_full_path(relative_path, path, sizeof(path)), TAG, "invalid path");
 
+    if (xSemaphoreTake(s_sd_mutex, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+
     FILE *f = fopen(path, "r");
-    ESP_RETURN_ON_FALSE(f != NULL, ESP_FAIL, TAG, "fopen for read failed");
+    if (f == NULL) {
+        xSemaphoreGive(s_sd_mutex);
+        return ESP_FAIL;
+    }
 
     size_t rd = fread(buffer, 1, buffer_len - 1, f);
     buffer[rd] = '\0';
     fclose(f);
+    xSemaphoreGive(s_sd_mutex);
     return ESP_OK;
 }
 
@@ -189,4 +296,16 @@ esp_err_t sdcard_service_run_self_test(void)
 const char *sdcard_service_mount_point(void)
 {
     return s_mount_point;
+}
+
+esp_err_t sdcard_service_sync(void)
+{
+    if (xSemaphoreTake(s_sd_mutex, portMAX_DELAY) == pdTRUE) {
+        if (s_append_file != NULL) {
+            fflush(s_append_file);         // Wypycha wewnętrzny bufor języka C
+            fsync(fileno(s_append_file));  // Sprzętowo aktualizuje FAT (rozmiar pliku)
+        }
+        xSemaphoreGive(s_sd_mutex);
+    }
+    return ESP_OK;
 }
