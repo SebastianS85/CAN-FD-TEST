@@ -8,17 +8,17 @@ import threading
 import csv
 import configparser
 from collections import deque
-from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer, QAbstractTableModel, QModelIndex
-from PyQt6.QtGui import QColor, QFont, QPainter
+from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer, QAbstractTableModel, QModelIndex, QPointF, QRegularExpression
+from PyQt6.QtGui import QColor, QFont, QPainter, QRegularExpressionValidator
 from PyQt6.QtWidgets import (
     QApplication, QHeaderView, QLabel, QTableView,
     QMainWindow, QPushButton, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QWidget, QHBoxLayout, 
     QCheckBox, QLineEdit, QComboBox, QMessageBox, QTabWidget,
-    QFileDialog, QGroupBox, QFormLayout, QScrollArea
+    QFileDialog, QGroupBox, QFormLayout, QScrollArea, QFrame
 )
 
-# --- KONFIGURACJA LOGOWANIA ---
+# --- LOGGING CONFIGURATION ---
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s [%(levelname)s] %(message)s',
@@ -33,16 +33,16 @@ try:
     CANTOOLS_AVAILABLE = True
 except ImportError:
     CANTOOLS_AVAILABLE = False
-    logging.warning("Brak biblioteki cantools - dekodowanie DBC wyłączone.")
+    logging.warning("Cantools library not found - DBC decoding is disabled.")
 
 try:
     from PyQt6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis
     CHARTS_AVAILABLE = True
 except ImportError:
     CHARTS_AVAILABLE = False
-    logging.warning("Brak biblioteki PyQt6-Charts - rysowanie wykresów wyłączone.")
+    logging.warning("PyQt6-Charts library not found - charts are disabled.")
 
-# --- OBSŁUGA PERSYSTENCJI (CONFIG.INI) ---
+# --- PERSISTENCE CONFIGURATION (CONFIG.INI) ---
 CONFIG_FILE = "config.ini"
 
 def load_config():
@@ -63,80 +63,76 @@ def save_config(ip, port):
     with open(CONFIG_FILE, "w") as f:
         config.write(f)
 
-# Wczytanie początkowych ustawień sieciowych z pliku
 TCP_IP, TCP_PORT = load_config()
 
 HEADER_FORMAT = "<IBIB"
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
-FRAME_SIZE = 74  # Rygorystyczny rozmiar struktury log_frame_t z ESP32
+FRAME_SIZE = 74  # Strict size of log_frame_t from ESP32
 
-# --- SŁOWNIK TŁUMACZEŃ ---
+# --- UI TRANSLATIONS ---
 TRANSLATIONS = {
     "PL": {
-        "title": "ESP32 CAN-FD Analyzer + DBC (TCP Client)", "status_active": "Status: Aktywny", "status_paused": "Status: WSTRZYMANY",
-        "load_dbc": "📂 Załaduj DBC", "channel": "Kanał:", "all_channels": "Wszystkie",
-        "filter_id": "Filtr ID:", "filter_ph": "np. 123 lub 100-200", "speed": "Prędkość:",
-        "pause": "Pauza", "resume": "Wznów", "autoscroll": "Auto-scroll", "delta_time": "Delta Time (Δt)", 
-        "clear": "Wyczyść", "export_csv": "💾 Eksport CSV", "ip_label": "ESP32 IP:", "connect_btn": "Połącz / Zmień IP",
+        "title": "ESP32 CAN-FD Analyzer", 
+        "load_dbc": "📂 DBC", "channel": "Kanał:", "all_channels": "Wszystkie",
+        "filter_id": "Filtr ID:", "filter_ph": "np. 123", "speed": "Prędkość:",
+        "pause": "Pauza", "resume": "Wznów", "autoscroll": "Auto-scroll", "delta_time": "Delta (Δt)", 
+        "clear": "Wyczyść", "export_csv": "💾 CSV", "ip_label": "IP:",
         "headers": ["Lp.", "Czas / Delta", "Magistrala", "CAN ID (Hex)", "DLC", "Dane Payload (Hex)", "Sygnały DBC"],
         "stats_headers": ["CAN ID (Hex)", "Liczba ramek", "Częstotliwość (Hz)", "Ostatni Czas", "Status"],
         "tab_monitor": "Monitor Surowy + DBC", "tab_plots": "Wykresy ID", "tab_stats": "Statystyki", "tab_gen": "Generator TX", "tab_sniffer": "Bit Sniffer",
         "stats_summary": "Ogółem: {} | CAN 1: {} | CAN 2: {} | Unikalnych ID: {} | DBC: {}",
         "form_bus": "Kanał docelowy:", "form_id": "CAN ID (Hex):", "form_ext": "Extended ID (29-bit):", "form_data": "Dane Hex:", "form_interval": "Send Every (ms):",
         "btn_send_once": "Wyślij raz", "btn_start_cyclic": "Start Cykliczny", "btn_stop_cyclic": "Stop Cykliczny",
-        "plot_id": "ID (Hex):", "plot_byte": "Bajt:", "sniffer_id": "Śledzone ID (Hex):",
+        "plot_id": "ID", "plot_byte": "Bajt:", "sniffer_id": "Śledzone ID (Hex):",
         "msg_err": "Błąd", "msg_succ": "Sukces", "msg_net_err": "Błąd Sieci",
         "msg_no_cantools": "Brak biblioteki cantools!", "msg_loaded": "Załadowano: ",
         "msg_bad_interval": "Niepoprawny interwał!", "msg_build_err": "Nie można zbudować ramki: ",
-        "status_ok": "OK", "status_timeout": "TIMEOUT", "export_succ": "Wyeksportowano do: ",
-        "ip_saved": "Zapisano nowy adres IP w pliku config.ini. Zrestartuj połączenie!"
+        "status_ok": "OK", "status_timeout": "TIMEOUT", "export_succ": "Wyeksportowano do: "
     },
     "EN": {
-        "title": "ESP32 CAN-FD Analyzer + DBC (TCP Client)", "status_active": "Status: Active", "status_paused": "Status: PAUSED",
-        "load_dbc": "📂 Load DBC", "channel": "Channel:", "all_channels": "All",
-        "filter_id": "ID Filter:", "filter_ph": "e.g. 123 or 100-200", "speed": "Speed:",
-        "pause": "Pause", "resume": "Resume", "autoscroll": "Auto-scroll", "delta_time": "Delta Time (Δt)", 
-        "clear": "Clear", "export_csv": "💾 Export CSV", "ip_label": "ESP32 IP:", "connect_btn": "Connect / Change IP",
+        "title": "ESP32 CAN-FD Analyzer", 
+        "load_dbc": "📂 DBC", "channel": "Channel:", "all_channels": "All",
+        "filter_id": "ID Filter:", "filter_ph": "e.g. 123", "speed": "Speed:",
+        "pause": "Pause", "resume": "Resume", "autoscroll": "Auto-scroll", "delta_time": "Delta (Δt)", 
+        "clear": "Clear", "export_csv": "💾 CSV", "ip_label": "IP:",
         "headers": ["No.", "Time / Delta", "Bus", "CAN ID (Hex)", "DLC", "Payload Data (Hex)", "DBC Signals"],
         "stats_headers": ["CAN ID (Hex)", "Count", "Frequency (Hz)", "Last Timestamp", "Status"],
         "tab_monitor": "Raw Monitor + DBC", "tab_plots": "ID Charts", "tab_stats": "Statistics", "tab_gen": "TX Generator", "tab_sniffer": "Bit Sniffer",
         "stats_summary": "Total: {} | CAN 1: {} | CAN 2: {} | Unique IDs: {} | DBC: {}",
         "form_bus": "Target Channel:", "form_id": "CAN ID (Hex):", "form_ext": "Extended ID (29-bit):", "form_data": "Data (Hex):", "form_interval": "Send Every (ms):",
         "btn_send_once": "Send Once", "btn_start_cyclic": "Start Cyclic", "btn_stop_cyclic": "Stop Cyclic",
-        "plot_id": "ID (Hex):", "plot_byte": "Byte:", "sniffer_id": "Tracked ID (Hex):",
+        "plot_id": "ID", "plot_byte": "Byte:", "sniffer_id": "Tracked ID (Hex):",
         "msg_err": "Error", "msg_succ": "Success", "msg_net_err": "Network Error",
         "msg_no_cantools": "Cantools library is missing!", "msg_loaded": "Loaded: ",
         "msg_bad_interval": "Invalid interval!", "msg_build_err": "Cannot build frame: ",
-        "status_ok": "OK", "status_timeout": "TIMEOUT", "export_succ": "Exported to: ",
-        "ip_saved": "New IP saved to config.ini. Please restart connection!"
+        "status_ok": "OK", "status_timeout": "TIMEOUT", "export_succ": "Exported to: "
     },
     "DE": {
-        "title": "ESP32 CAN-FD Analyzer + DBC (TCP Client)", "status_active": "Status: Aktiv", "status_paused": "Status: PAUSE",
-        "load_dbc": "📂 DBC laden", "channel": "Kanal:", "all_channels": "Alle",
-        "filter_id": "ID-Filter:", "filter_ph": "z.B. 123 oder 100-200", "speed": "Geschwindigkeit:",
-        "pause": "Pause", "resume": "Fortsetzen", "autoscroll": "Auto-Scroll", "delta_time": "Delta-Zeit (Δt)", 
-        "clear": "Löschen", "export_csv": "💾 CSV Export", "ip_label": "ESP32 IP:", "connect_btn": "Verbinden / IP ändern",
+        "title": "ESP32 CAN-FD Analyzer", 
+        "load_dbc": "📂 DBC", "channel": "Kanal:", "all_channels": "Alle",
+        "filter_id": "ID-Filter:", "filter_ph": "z.B. 123", "speed": "Geschwindigkeit:",
+        "pause": "Pause", "resume": "Fortsetzen", "autoscroll": "Auto-Scroll", "delta_time": "Delta (Δt)", 
+        "clear": "Löschen", "export_csv": "💾 CSV", "ip_label": "IP:",
         "headers": ["Nr.", "Zeit / Delta", "Bus", "CAN ID (Hex)", "DLC", "Nutzdaten (Hex)", "DBC Signale"],
         "stats_headers": ["CAN ID (Hex)", "Anzahl", "Frequenz (Hz)", "Letzter Zeitst.", "Status"],
         "tab_monitor": "Rohmonitor + DBC", "tab_plots": "ID Diagramme", "tab_stats": "Statistik", "tab_gen": "TX Generator", "tab_sniffer": "Bit Sniffer",
         "stats_summary": "Gesamt: {} | CAN 1: {} | CAN 2: {} | IDs: {} | DBC: {}",
         "form_bus": "Zielkanal:", "form_id": "CAN ID (Hex):", "form_ext": "Extended ID (29-bit):", "form_data": "Daten (Hex):", "form_interval": "Senden alle (ms):",
         "btn_send_once": "Einmal senden", "btn_start_cyclic": "Zyklisch Starten", "btn_stop_cyclic": "Zyklisch Stoppen",
-        "plot_id": "ID (Hex):", "plot_byte": "Byte:", "sniffer_id": "Verfolgte ID (Hex):",
+        "plot_id": "ID", "plot_byte": "Byte:", "sniffer_id": "Verfolgte ID (Hex):",
         "msg_err": "Fehler", "msg_succ": "Erfolg", "msg_net_err": "Netzwerkfehler",
         "msg_no_cantools": "Cantools-Bibliothek fehlt!", "msg_loaded": "Geladen: ",
         "msg_bad_interval": "Ungültiges Intervall!", "msg_build_err": "Frame kann nicht erstellt werden: ",
-        "status_ok": "OK", "status_timeout": "TIMEOUT", "export_succ": "Exportiert nach: ",
-        "ip_saved": "Neue IP in config.ini gespeichert. Verbindung neu starten!"
+        "status_ok": "OK", "status_timeout": "TIMEOUT", "export_succ": "Exportiert nach: "
     }
 }
 
-# --- STYLIZACJA ---
 INDUSTRIAL_STYLESHEET = """
-QMainWindow { background-color: #1b1b1b; color: #cccccc; }
-QPushButton { background-color: #2c2c2c; color: #e0e0e0; border: 1px solid #3c3c3c; border-radius: 4px; padding: 6px 12px; font-weight: bold; font-size: 11px; }
+QMainWindow { background-color: #1b1b1b; color: #cccccc; font-family: "Segoe UI", sans-serif; }
+QPushButton { background-color: #2c2c2c; color: #e0e0e0; border: 1px solid #3c3c3c; border-radius: 4px; padding: 6px 10px; font-weight: bold; font-size: 11px; }
 QPushButton:hover { background-color: #383838; border: 1px solid #505050; }
 QPushButton:pressed { background-color: #222222; }
+QPushButton:checked { background-color: #d28e00; color: #111; border: 1px solid #b87a00; }
 QPushButton#btnSendOnce { background-color: #114b7d; border: 1px solid #1f6feb; }
 QPushButton#btnSendOnce:hover { background-color: #1f6feb; }
 QPushButton#btnStartCyclic { background-color: #1b5e20; border: 1px solid #238636; }
@@ -146,7 +142,7 @@ QPushButton#btnStopCyclic:hover { background-color: #f85149; }
 QPushButton#btnExport { background-color: #d28e00; color: #111; border: 1px solid #b87a00; }
 QPushButton#btnExport:hover { background-color: #e5a417; }
 QPushButton:disabled { background-color: #181818; color: #555555; border: 1px solid #242424; }
-QLineEdit, QComboBox { background-color: #141414; color: #00dd99; border: 1px solid #333333; border-radius: 3px; padding: 4px; }
+QLineEdit, QComboBox { background-color: #141414; color: #00dd99; border: 1px solid #333333; border-radius: 4px; padding: 4px; }
 QTabWidget::pane { border: 1px solid #333333; background-color: #161616; }
 QTabBar::tab { background-color: #222222; color: #999999; padding: 6px 14px; border-top-left-radius: 3px; border-top-right-radius: 3px; margin-right: 2px; }
 QTabBar::tab:selected { background-color: #2c2c2c; color: #ffffff; font-weight: bold; }
@@ -156,6 +152,11 @@ QTableView { background-color: #141414; color: #00e5ff; gridline-color: #242424;
 QTableView::item:selected { background-color: #2c3e50; }
 QHeaderView::section { background-color: #222222; color: #cccccc; padding: 4px; border: 1px solid #333; }
 QScrollArea { border: none; background-color: transparent; }
+
+/* Chart Specific Styles */
+QFrame#chartControlBar { background-color: #222222; border: 1px solid #333333; border-radius: 6px; }
+QLineEdit.chartInput { background-color: #121212; color: #ffffff; border: 1px solid #444; font-weight: bold; }
+QLineEdit.chartInput:focus { border: 1px solid #6ec5ff; background-color: #1a1a1a; }
 """
 
 def dlc_to_len(dlc):
@@ -214,6 +215,7 @@ class BitGridWidget(QWidget):
         if changed: self.update()
 
     def decay_colors(self):
+        if not self.isVisible(): return
         needs_update = False
         for r in range(len(self.current_data)):
             for c in range(8):
@@ -267,33 +269,48 @@ class TCPReceiverThread(QThread):
         self.client_socket = None
 
     def update_ip(self, new_ip):
-        self.ip = new_ip
-        if self.client_socket:
-            try: self.client_socket.close()
-            except: pass
+        if self.ip != new_ip:
+            self.ip = new_ip
+            if self.client_socket:
+                try: self.client_socket.close()
+                except: pass
 
     def run(self):
-        logging.info(f"Wątek klienta TCP uruchomiony. Cel: {self.ip}:{self.port}")
+        logging.info(f"TCP client thread started. Target: {self.ip}:{self.port}")
 
         while self.running:
-            self.connection_status.emit(False, f"Status: Szukam ESP32 ({self.ip})...")
+            self.connection_status.emit(False, "SEARCHING...")
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(2.0)
                 sock.connect((self.ip, self.port))
+                
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                if sys.platform == 'win32':
+                    sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 3000, 1000))
+                else:
+                    try:
+                        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 3)
+                        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 1)
+                        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
+                    except AttributeError:
+                        pass
+
                 sock.settimeout(2.0)
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 
                 self.client_socket = sock
-                self.connection_status.emit(True, f"Status: Połączono z ESP32 ({self.ip})")
-                logging.info(f"Połączono z ESP32 pod adresem {self.ip}!")
+                self.connection_status.emit(True, "CONNECTED")
+                logging.info(f"Connected to ESP32 at {self.ip}!")
 
                 stream_buffer = bytearray()
                 
                 while self.running:
                     try:
                         chunk = sock.recv(1024 * 64) 
-                        if not chunk: break 
+                        if not chunk: 
+                            logging.warning("ESP32 closed connection.")
+                            break 
                         stream_buffer.extend(chunk)
                         
                         while len(stream_buffer) >= FRAME_SIZE:
@@ -304,17 +321,17 @@ class TCPReceiverThread(QThread):
                     except socket.timeout:
                         continue
                     except Exception as e:
-                        logging.error(f"Utrata pakietów w streamie: {e}")
+                        logging.error(f"TCP stream error: {e}")
                         break
                         
                 sock.close()
                 self.client_socket = None
-                logging.warning("Rozłączono z ESP32. Ponawiam próbę...")
+                logging.warning("Disconnected from ESP32. Retrying...")
             except (socket.timeout, ConnectionRefusedError, OSError):
                 time.sleep(1.0)
                 continue
             except Exception as e:
-                logging.error(f"Błąd TCP Klienta: {e}")
+                logging.error(f"TCP Error: {e}")
                 time.sleep(1.0)
 
     def send_tcp_data(self, payload):
@@ -323,7 +340,7 @@ class TCPReceiverThread(QThread):
                 self.client_socket.sendall(payload)
                 return True
             except Exception as e:
-                logging.error(f"Błąd wysyłania komendy TX: {e}")
+                logging.error(f"TX error: {e}")
         return False
 
     def stop(self):
@@ -363,9 +380,9 @@ class DataProcessorThread(QThread):
         self.filter_text = ""
         self.selected_bus_idx = 0
         self.is_delta_mode = False
-        self.target_id = -1
-        self.target_byte = -1
+        self.chart_targets = []
         self.sniffer_target_id = -1
+        self.db = None
         
         self.stats_lock = threading.Lock()
         self.total_frames = 0
@@ -376,17 +393,20 @@ class DataProcessorThread(QThread):
         self.id_frequencies = {}
         self.max_esp_timestamp = 0
         self.last_global_timestamp = 0
-        self.latest_chart_data = None
+        
+        self.chart_buffers = [[] for _ in range(4)]
         self.latest_sniffed_data = None
 
-    def update_settings(self, is_paused, filter_text, bus_idx, is_delta, target_id, target_byte, sniffer_id):
+    def update_settings(self, is_paused, filter_text, bus_idx, is_delta, chart_targets, sniffer_id):
         self.is_paused = is_paused
         self.filter_text = filter_text
         self.selected_bus_idx = bus_idx
         self.is_delta_mode = is_delta
-        self.target_id = target_id
-        self.target_byte = target_byte
+        self.chart_targets = chart_targets
         self.sniffer_target_id = sniffer_id
+
+    def update_db(self, db):
+        self.db = db
 
     def clear_stats(self):
         with self.stats_lock:
@@ -398,7 +418,7 @@ class DataProcessorThread(QThread):
             self.id_frequencies.clear()
             self.max_esp_timestamp = 0
             self.last_global_timestamp = 0
-            self.latest_chart_data = None
+            self.chart_buffers = [[] for _ in range(4)]
             self.latest_sniffed_data = None
 
     def get_and_reset_speed(self):
@@ -406,6 +426,12 @@ class DataProcessorThread(QThread):
             f, b = self.frames_in_last_sec, self.bytes_in_last_sec
             self.frames_in_last_sec, self.bytes_in_last_sec = 0, 0
             return f, b
+
+    def get_and_clear_chart_buffers(self):
+        with self.stats_lock:
+            res = self.chart_buffers
+            self.chart_buffers = [[] for _ in range(4)]
+            return res
 
     def run(self):
         accumulated_gui_frames = []
@@ -420,88 +446,111 @@ class DataProcessorThread(QThread):
             while self.incoming_buffer:
                 batch.append(self.incoming_buffer.popleft())
 
-            if not batch:
-                time.sleep(0.005) 
-                continue
-
-            processed_frames = []
-            local_frames, local_bytes = 0, 0
-            
-            with self.stats_lock:
-                for data in batch:
-                    if len(data) != FRAME_SIZE: continue
-                    
-                    timestamp, node_id, can_id, dlc = struct.unpack_from(HEADER_FORMAT, data, 0)
-                    actual_len = dlc_to_len(dlc)
-                    raw_data = data[10 : 10 + actual_len]
-
-                    self.total_frames += 1
-                    local_frames += 1
-                    local_bytes += (HEADER_SIZE + actual_len)
-                    
-                    if timestamp > self.max_esp_timestamp:
-                        self.max_esp_timestamp = timestamp
-
-                    clean_id = can_id & 0x1FFFFFFF 
-                    
-                    if clean_id == self.sniffer_target_id:
-                        self.latest_sniffed_data = raw_data[:actual_len]
-                    
-                    if clean_id in self.id_last_timestamp:
-                        dt = (timestamp - self.id_last_timestamp[clean_id]) / 1000.0
-                        if dt > 0:
-                            inst_hz = 1.0 / dt
-                            old_hz = self.id_frequencies.get(clean_id, inst_hz)
-                            self.id_frequencies[clean_id] = 0.8 * old_hz + 0.2 * inst_hz
-                    self.id_last_timestamp[clean_id] = timestamp
-                    self.id_statistics[clean_id] = self.id_statistics.get(clean_id, 0) + 1
-
-                    if node_id == 1: self.bus1_count += 1
-                    elif node_id == 2: self.bus2_count += 1
-
-                    if self.selected_bus_idx == 1 and node_id != 1: continue
-                    if self.selected_bus_idx == 2 and node_id != 2: continue
-
-                    if self.filter_text:
-                        matched = False
+            if batch:
+                processed_frames = []
+                local_frames, local_bytes = 0, 0
+                
+                with self.stats_lock:
+                    for data in batch:
+                        if len(data) != FRAME_SIZE: 
+                            continue
+                        
                         try:
-                            if "-" in self.filter_text:
-                                p = self.filter_text.split("-")
-                                if int(p[0].strip(), 16) <= clean_id <= int(p[1].strip(), 16): matched = True
+                            timestamp, node_id, can_id, dlc = struct.unpack_from(HEADER_FORMAT, data, 0)
+                            actual_len = dlc_to_len(dlc)
+                            if actual_len < 0 or actual_len > 64: actual_len = 8
+                                
+                            raw_data = data[10 : 10 + actual_len]
+                            self.total_frames += 1
+                            local_frames += 1
+                            local_bytes += (HEADER_SIZE + actual_len)
+                            
+                            if timestamp > self.max_esp_timestamp:
+                                self.max_esp_timestamp = timestamp
+
+                            clean_id = can_id & 0x1FFFFFFF 
+                            
+                            if clean_id == self.sniffer_target_id:
+                                self.latest_sniffed_data = raw_data[:actual_len]
+                            
+                            if clean_id in self.id_last_timestamp:
+                                dt = (timestamp - self.id_last_timestamp[clean_id]) / 1000.0
+                                if dt > 0:
+                                    inst_hz = 1.0 / dt
+                                    old_hz = self.id_frequencies.get(clean_id, inst_hz)
+                                    self.id_frequencies[clean_id] = 0.8 * old_hz + 0.2 * inst_hz
+                            
+                            self.id_last_timestamp[clean_id] = timestamp
+                            self.id_statistics[clean_id] = self.id_statistics.get(clean_id, 0) + 1
+
+                            if node_id == 1: self.bus1_count += 1
+                            elif node_id == 2: self.bus2_count += 1
+
+                            # Multi-Chart Capture
+                            for idx, (t_id, t_byte) in enumerate(self.chart_targets):
+                                if t_id != -1 and clean_id == t_id and 0 <= t_byte < actual_len:
+                                    self.chart_buffers[idx].append((timestamp / 1000.0, raw_data[t_byte]))
+
+                            if self.selected_bus_idx == 1 and node_id != 1: continue
+                            if self.selected_bus_idx == 2 and node_id != 2: continue
+
+                            if self.filter_text:
+                                matched = False
+                                try:
+                                    if "-" in self.filter_text:
+                                        p = self.filter_text.split("-")
+                                        if int(p[0].strip(), 16) <= clean_id <= int(p[1].strip(), 16): matched = True
+                                    else:
+                                        if clean_id == int(self.filter_text.replace("0x", ""), 16): matched = True
+                                except ValueError: pass
+                                if not matched: continue
+
+                            if self.is_delta_mode:
+                                if self.last_global_timestamp == 0: time_val_str = "0 ms"
+                                else:
+                                    delta_ms = timestamp - self.last_global_timestamp
+                                    time_val_str = f"+{delta_ms} ms" if delta_ms >= 0 else f"{delta_ms} ms"
+                                self.last_global_timestamp = timestamp
                             else:
-                                if clean_id == int(self.filter_text.replace("0x", ""), 16): matched = True
-                        except ValueError: pass
-                        if not matched: continue
+                                time_val_str = f"{timestamp} ms"
 
-                    if self.is_delta_mode:
-                        if self.last_global_timestamp == 0: time_val_str = "0 ms"
-                        else:
-                            delta_ms = timestamp - self.last_global_timestamp
-                            time_val_str = f"+{delta_ms} ms" if delta_ms >= 0 else f"{delta_ms} ms"
-                        self.last_global_timestamp = timestamp
-                    else:
-                        time_val_str = f"{timestamp} ms"
+                            hex_str = " ".join(f"{b:02X}" for b in raw_data)
+                            id_str = f"0x{clean_id:03X}" if clean_id <= 0x7FF else f"0x{clean_id:08X} (Ext)"
+                            
+                            dbc_str = "-"
+                            if self.db and CANTOOLS_AVAILABLE:
+                                try:
+                                    decoded = self.db.decode_message(clean_id, bytes(raw_data))
+                                    dbc_str = ", ".join([f"{k}={v}" for k, v in decoded.items()])
+                                except Exception:
+                                    pass
 
-                    if self.target_id != -1 and clean_id == self.target_id and 0 <= self.target_byte < actual_len:
-                        self.latest_chart_data = (timestamp / 1000.0, raw_data[self.target_byte])
+                            processed_frames.append({
+                                'no': self.total_frames, 'time': time_val_str, 'node_id': node_id,
+                                'id_str': id_str, 'len': actual_len, 'hex_str': hex_str,
+                                'dbc_str': dbc_str, 'clean_id': clean_id, 'raw_data': raw_data
+                            })
+                            
+                        except struct.error:
+                            continue
+                        except Exception:
+                            continue
+                        
+                    self.frames_in_last_sec += local_frames
+                    self.bytes_in_last_sec += local_bytes
 
-                    processed_frames.append({
-                        'no': self.total_frames, 'time': time_val_str, 'node_id': node_id,
-                        'clean_id': clean_id, 'len': actual_len, 'raw_data': raw_data
-                    })
-                    
-                self.frames_in_last_sec += local_frames
-                self.bytes_in_last_sec += local_bytes
-
-            if processed_frames:
-                accumulated_gui_frames.extend(processed_frames)
+                if processed_frames:
+                    accumulated_gui_frames.extend(processed_frames)
 
             now = time.perf_counter()
-            if len(accumulated_gui_frames) >= 500 or (now - last_gui_emit) >= 0.05:
+            if len(accumulated_gui_frames) >= 200 or (now - last_gui_emit) >= 0.05:
                 if accumulated_gui_frames:
                     self.frames_ready.emit(accumulated_gui_frames)
                     accumulated_gui_frames = []
-                    last_gui_emit = now
+                last_gui_emit = now
+
+            if not batch:
+                time.sleep(0.005)
 
     def stop(self):
         self.running = False
@@ -512,8 +561,7 @@ class CANTableModel(QAbstractTableModel):
         super().__init__()
         self.headers = headers
         self.frames = []
-        self.db = None
-        self.MAX_FRAMES = 100000
+        self.MAX_FRAMES = 5000  
 
     def rowCount(self, parent=QModelIndex()): return len(self.frames)
     def columnCount(self, parent=QModelIndex()): return len(self.headers)
@@ -522,10 +570,6 @@ class CANTableModel(QAbstractTableModel):
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
             return self.headers[section]
         return None
-
-    def update_db(self, db):
-        self.db = db
-        self.layoutChanged.emit()
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid(): return None
@@ -536,24 +580,10 @@ class CANTableModel(QAbstractTableModel):
             if col == 0: return str(frame['no'])
             elif col == 1: return frame['time']
             elif col == 2: return f"CAN {frame['node_id']}"
-            elif col == 3: 
-                return f"0x{frame['clean_id']:03X}" if frame['clean_id'] <= 0x7FF else f"0x{frame['clean_id']:08X} (Ext)"
+            elif col == 3: return frame['id_str']
             elif col == 4: return str(frame['len'])
-            elif col == 5: 
-                if 'hex_str' not in frame:
-                    frame['hex_str'] = " ".join(f"{b:02X}" for b in frame['raw_data'])
-                return frame['hex_str']
-            elif col == 6:
-                if 'decoded' not in frame:
-                    if self.db and CANTOOLS_AVAILABLE:
-                        try:
-                            decoded = self.db.decode_message(frame['clean_id'], bytes(frame['raw_data']))
-                            frame['decoded'] = ", ".join([f"{k}={v}" for k, v in decoded.items()])
-                        except Exception:
-                            frame['decoded'] = "-"
-                    else:
-                        frame['decoded'] = "-"
-                return frame['decoded']
+            elif col == 5: return frame['hex_str']
+            elif col == 6: return frame['dbc_str']
 
         elif role == Qt.ItemDataRole.BackgroundRole:
             return QColor(20, 20, 20) if frame['node_id'] == 1 else QColor(24, 24, 28)
@@ -566,7 +596,7 @@ class CANTableModel(QAbstractTableModel):
     def add_frames(self, new_frames):
         if not new_frames: return
         if len(self.frames) + len(new_frames) > self.MAX_FRAMES:
-            cut_amount = len(new_frames) + 5000
+            cut_amount = len(new_frames) + 1000
             self.beginRemoveRows(QModelIndex(), 0, cut_amount - 1)
             del self.frames[:cut_amount]
             self.endRemoveRows()
@@ -592,6 +622,9 @@ class CANViewerFullWindow(QMainWindow):
         self.db = None
         self.dbc_filename = "-"
 
+        self.chart_points = [deque() for _ in range(4)]
+        self.chart_start_t = None
+
         self.setup_ui()
 
         self.tcp_thread = TCPReceiverThread(TCP_IP, TCP_PORT, self.incoming_buffer)
@@ -608,9 +641,6 @@ class CANViewerFullWindow(QMainWindow):
         self.bus_filter_combo.currentIndexChanged.connect(self.send_settings_to_thread)
         self.delta_cb.stateChanged.connect(self.send_settings_to_thread)
         self.sniffer_id_input.textChanged.connect(self.send_settings_to_thread)
-        if CHARTS_AVAILABLE:
-            self.plot_id_input.textChanged.connect(self.send_settings_to_thread)
-            self.plot_byte_input.textChanged.connect(self.send_settings_to_thread)
 
         self.speed_timer = QTimer()
         self.speed_timer.timeout.connect(self.update_periodic_timers)
@@ -622,7 +652,7 @@ class CANViewerFullWindow(QMainWindow):
 
         self.fast_ui_timer = QTimer()
         self.fast_ui_timer.timeout.connect(self.update_fast_ui)
-        self.fast_ui_timer.start(50)
+        self.fast_ui_timer.start(65)
 
         self.send_settings_to_thread()
 
@@ -640,47 +670,29 @@ class CANViewerFullWindow(QMainWindow):
         self.lang_combo.addItems(["Polski (PL)", "English (EN)", "Deutsch (DE)"])
         self.lang_combo.currentIndexChanged.connect(self.change_language)
         
-        self.status_label = QLabel("Status: Oczekiwanie na TCP...")
-        self.status_label.setStyleSheet("color: #ff9800; font-weight: bold;")
-        self.status_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        self.status_label = QLabel("DISCONNECTED")
+        self.status_label.setFixedWidth(100)
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_label.setStyleSheet("background-color: #b71c1c; color: #ffffff; font-weight: bold; padding: 4px; border-radius: 4px;")
         
-        # --- PODEJŚCIE PERSYSTENTNE DLA IP ---
-        self.ip_label = QLabel()
-        self.ip_label.setStyleSheet(
-            "color: #7bdcff; font-weight: bold; padding: 0 6px;"
-        )
+        self.ip_label = QLabel("IP:")
+        self.ip_label.setStyleSheet("color: #7bdcff; font-weight: bold; padding: 0 4px;")
 
         self.ip_input = QLineEdit(TCP_IP)
-        self.ip_input.setPlaceholderText("192.168.178.45")
-        self.ip_input.setFixedWidth(150)
+        self.ip_input.setPlaceholderText("192.168.1.x")
+        self.ip_input.setFixedWidth(110)
         self.ip_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.ip_input.setStyleSheet(
             "QLineEdit {"
             "background-color: #0f1720;"
             "color: #80ecff;"
             "border: 1px solid #2d6cdf;"
-            "border-radius: 6px;"
-            "padding: 5px 8px;"
-            "min-height: 24px;"
+            "border-radius: 4px;"
+            "padding: 3px 6px;"
             "}"
             "QLineEdit:focus { border: 1px solid #6ec5ff; }"
         )
-        self.ip_input.setClearButtonEnabled(True)
-        
-        self.connect_btn = QPushButton()
-        self.connect_btn.setStyleSheet(
-            "QPushButton {"
-            "background-color: #1e5aa8;"
-            "color: white;"
-            "border: 1px solid #2e78d6;"
-            "border-radius: 6px;"
-            "padding: 6px 12px;"
-            "font-weight: bold;"
-            "}"
-            "QPushButton:hover { background-color: #2d6cdf; }"
-            "QPushButton:pressed { background-color: #17468f; }"
-        )
-        self.connect_btn.clicked.connect(self.save_and_reconnect_ip)
+        self.ip_input.editingFinished.connect(self.save_and_reconnect_ip)
         
         self.load_dbc_btn = QPushButton()
         self.load_dbc_btn.clicked.connect(self.load_dbc_file)
@@ -689,7 +701,7 @@ class CANViewerFullWindow(QMainWindow):
         self.bus_filter_combo = QComboBox()
         self.filter_label = QLabel()
         self.filter_input = QLineEdit()
-        self.filter_input.setMaximumWidth(100)
+        self.filter_input.setMaximumWidth(80)
         
         self.speed_label = QLabel()
         self.speed_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
@@ -697,6 +709,7 @@ class CANViewerFullWindow(QMainWindow):
         
         self.pause_btn = QPushButton()
         self.pause_btn.setCheckable(True)
+        self.pause_btn.setMinimumWidth(80)
         self.pause_btn.clicked.connect(self.toggle_pause)
         
         self.delta_cb = QCheckBox()
@@ -714,7 +727,7 @@ class CANViewerFullWindow(QMainWindow):
         top_layout.addWidget(self.status_label)
         top_layout.addWidget(self.ip_label)
         top_layout.addWidget(self.ip_input)
-        top_layout.addWidget(self.connect_btn)
+        top_layout.addSpacing(10)
         top_layout.addWidget(self.load_dbc_btn)
         top_layout.addWidget(self.channel_label)
         top_layout.addWidget(self.bus_filter_combo)
@@ -754,36 +767,97 @@ class CANViewerFullWindow(QMainWindow):
         plot_tab = QWidget()
         plot_layout = QVBoxLayout(plot_tab)
         if CHARTS_AVAILABLE:
-            plot_ctrl = QHBoxLayout()
-            self.plot_id_label = QLabel()
-            plot_ctrl.addWidget(self.plot_id_label)
-            self.plot_id_input = QLineEdit("321")
-            self.plot_id_input.setMaximumWidth(70)
-            plot_ctrl.addWidget(self.plot_id_input)
-            
-            self.plot_byte_label = QLabel()
-            plot_ctrl.addWidget(self.plot_byte_label)
-            self.plot_byte_input = QLineEdit("0")
-            self.plot_byte_input.setMaximumWidth(40)
-            plot_ctrl.addWidget(self.plot_byte_input)
-            plot_ctrl.addStretch()
-            plot_layout.addLayout(plot_ctrl)
+            plot_control_bar = QFrame()
+            plot_control_bar.setObjectName("chartControlBar")
+            plot_ctrl = QHBoxLayout(plot_control_bar)
+            plot_ctrl.setContentsMargins(15, 10, 15, 10)
+            plot_ctrl.setSpacing(25)
 
+            self.chart_inputs = []
+            self.chart_labels_id = []
+            self.chart_labels_b = []
+            
+            colors = [QColor(255, 80, 80), QColor(80, 255, 80), QColor(80, 180, 255), QColor(255, 200, 80)]
+            self.series_list = []
+            
             self.chart = QChart()
             self.chart.setTheme(QChart.ChartTheme.ChartThemeDark)
-            self.series = QLineSeries()
-            self.chart.addSeries(self.series)
+            self.chart.setBackgroundVisible(False)
             
+            # MASKI OCHRONNE NA POLA
+            hex_validator = QRegularExpressionValidator(QRegularExpression("[0-9A-Fa-f]{1,8}"))
+            byte_validator = QRegularExpressionValidator(QRegularExpression("^[0-9]$|^[1-5][0-9]$|^6[0-3]$"))
+
+            for i in range(4):
+                group = QWidget()
+                glayout = QHBoxLayout(group)
+                glayout.setContentsMargins(0, 0, 0, 0)
+                glayout.setSpacing(6)
+                
+                lbl_id = QLabel()
+                lbl_id.setStyleSheet(f"color: {colors[i].name()}; font-weight: bold; font-size: 12px;")
+                
+                inp_id = QLineEdit()
+                inp_id.setProperty("class", "chartInput")
+                inp_id.setValidator(hex_validator)
+                inp_id.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                inp_id.setMaximumWidth(65)
+                inp_id.setPlaceholderText("Hex")
+                
+                lbl_b = QLabel()
+                lbl_b.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+                
+                inp_b = QLineEdit()
+                inp_b.setProperty("class", "chartInput")
+                inp_b.setValidator(byte_validator)
+                inp_b.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                inp_b.setMaximumWidth(40)
+                inp_b.setPlaceholderText("0-63")
+                
+                if i == 0:
+                    inp_id.setText("321")
+                    inp_b.setText("0")
+                
+                glayout.addWidget(lbl_id)
+                glayout.addWidget(inp_id)
+                glayout.addSpacing(5)
+                glayout.addWidget(lbl_b)
+                glayout.addWidget(inp_b)
+                
+                self.chart_labels_id.append(lbl_id)
+                self.chart_labels_b.append(lbl_b)
+                self.chart_inputs.append((inp_id, inp_b))
+                plot_ctrl.addWidget(group)
+                
+                series = QLineSeries()
+                series.setName(f"Trace {i+1}")
+                series.setColor(colors[i])
+                
+                pen = series.pen()
+                pen.setWidth(2)
+                series.setPen(pen)
+                
+                self.chart.addSeries(series)
+                self.series_list.append(series)
+                
+                inp_id.textChanged.connect(self.send_settings_to_thread)
+                inp_b.textChanged.connect(self.send_settings_to_thread)
+
+            plot_ctrl.addStretch()
+            plot_layout.addWidget(plot_control_bar)
+
             self.axis_x = QValueAxis()
             self.axis_x.setLabelFormat("%.1f")
             self.axis_x.setRange(0, 10)
             self.chart.addAxis(self.axis_x, Qt.AlignmentFlag.AlignBottom)
-            self.series.attachAxis(self.axis_x)
 
             self.axis_y = QValueAxis()
             self.axis_y.setRange(0, 255)
             self.chart.addAxis(self.axis_y, Qt.AlignmentFlag.AlignLeft)
-            self.series.attachAxis(self.axis_y)
+            
+            for series in self.series_list:
+                series.attachAxis(self.axis_x)
+                series.attachAxis(self.axis_y)
 
             self.chart_view = QChartView(self.chart)
             self.chart_view.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -876,17 +950,19 @@ class CANViewerFullWindow(QMainWindow):
 
     def save_and_reconnect_ip(self):
         new_ip = self.ip_input.text().strip()
-        if new_ip:
+        if new_ip and new_ip != self.tcp_thread.ip:
             save_config(new_ip, TCP_PORT)
             self.tcp_thread.update_ip(new_ip)
-            QMessageBox.information(self, self.get_t("msg_succ"), self.get_t("ip_saved"))
+            logging.info(f"New IP saved. Auto-connecting to {new_ip}")
 
     def update_connection_status(self, is_connected, message):
         self.status_label.setText(message)
         if is_connected:
-            self.status_label.setStyleSheet("color: #4caf50; font-weight: bold;")
+            self.status_label.setStyleSheet("background-color: #1b5e20; color: #ffffff; font-weight: bold; padding: 4px; border-radius: 4px;")
+            self.ip_input.setStyleSheet("background-color: #0f1720; color: #80ecff; border: 1px solid #4caf50; border-radius: 4px; padding: 3px 6px;")
         else:
-            self.status_label.setStyleSheet("color: #ff9800; font-weight: bold;")
+            self.status_label.setStyleSheet("background-color: #b71c1c; color: #ffffff; font-weight: bold; padding: 4px; border-radius: 4px;")
+            self.ip_input.setStyleSheet("background-color: #2b0e0e; color: #ff8080; border: 1px solid #f44336; border-radius: 4px; padding: 3px 6px;")
 
     def send_settings_to_thread(self):
         filter_text = self.filter_input.text().strip().lower()
@@ -894,13 +970,17 @@ class CANViewerFullWindow(QMainWindow):
         is_delta = self.delta_cb.isChecked()
         is_paused = self.pause_btn.isChecked()
         
-        target_id, target_byte = -1, -1
+        chart_targets = []
         if CHARTS_AVAILABLE:
-            try:
-                target_id = int(self.plot_id_input.text().strip(), 16)
-                target_byte = int(self.plot_byte_input.text().strip())
-            except ValueError:
-                pass
+            for inp_id, inp_b in self.chart_inputs:
+                try:
+                    c_id = int(inp_id.text().strip(), 16)
+                    c_b = int(inp_b.text().strip())
+                    chart_targets.append((c_id, c_b))
+                except ValueError:
+                    chart_targets.append((-1, -1))
+        else:
+            chart_targets = [(-1, -1)] * 4
                 
         sniffer_id = -1
         try:
@@ -908,7 +988,7 @@ class CANViewerFullWindow(QMainWindow):
         except ValueError:
             pass
 
-        self.processor_thread.update_settings(is_paused, filter_text, bus_idx, is_delta, target_id, target_byte, sniffer_id)
+        self.processor_thread.update_settings(is_paused, filter_text, bus_idx, is_delta, chart_targets, sniffer_id)
 
     def on_frames_ready(self, processed_frames):
         self.table_model.add_frames(processed_frames)
@@ -926,9 +1006,7 @@ class CANViewerFullWindow(QMainWindow):
                     writer = csv.writer(f)
                     writer.writerow(["No", "Time", "Node_ID", "CAN_ID_Hex", "DLC", "Data_Hex", "Decoded"])
                     for fr in self.table_model.frames:
-                        h_str = fr.get('hex_str', " ".join(f"{b:02X}" for b in fr['raw_data']))
-                        d_str = fr.get('decoded', "-")
-                        writer.writerow([fr['no'], fr['time'], fr['node_id'], f"{fr['clean_id']:X}", fr['len'], h_str, d_str])
+                        writer.writerow([fr['no'], fr['time'], fr['node_id'], f"{fr['clean_id']:X}", fr['len'], fr['hex_str'], fr['dbc_str']])
                 QMessageBox.information(self, self.get_t("msg_succ"), f"{self.get_t('export_succ')}{filename}")
             except Exception as e:
                 QMessageBox.critical(self, self.get_t("msg_err"), str(e))
@@ -973,13 +1051,49 @@ class CANViewerFullWindow(QMainWindow):
 
     def update_fast_ui(self):
         if self.pause_btn.isChecked(): return
-        if CHARTS_AVAILABLE and self.processor_thread.latest_chart_data: 
-            t_sec, val = self.processor_thread.latest_chart_data
-            self.series.append(t_sec, val)
-            if self.series.count() > 300: self.series.remove(0)
-            self.axis_x.setRange(t_sec - 10.0 if t_sec > 10.0 else 0.0, t_sec + 1.0)
+        
+        if CHARTS_AVAILABLE:
+            buffers = self.processor_thread.get_and_clear_chart_buffers()
             
-        if self.processor_thread.latest_sniffed_data:
+            if self.tabs.currentIndex() == 1:
+                max_t = None
+                for i, buf in enumerate(buffers):
+                    if buf:
+                        pts = self.chart_points[i]
+                        for t_sec, val in buf:
+                            pts.append(QPointF(t_sec, val))
+                            if self.chart_start_t is None:
+                                self.chart_start_t = t_sec
+                        
+                        if max_t is None or pts[-1].x() > max_t:
+                            max_t = pts[-1].x()
+                
+                if max_t is not None:
+                    # Dynamiczne odrzucanie starych punktow (powyzej 10s od najnowszego)
+                    for i in range(4):
+                        pts = self.chart_points[i]
+                        while len(pts) > 0 and pts[0].x() < max_t - 10.0:
+                            pts.popleft()
+                        
+                        while len(pts) > 5000: # Ostateczne zabezpieczenie pamiêci
+                            pts.popleft()
+                            
+                        if len(pts) > 0:
+                            self.series_list[i].replace(list(pts))
+                    
+                    # Plynne sledzenie X-osi, startujace od lewej krawedzi
+                    start_x = self.chart_start_t if (self.chart_start_t is not None and (max_t - self.chart_start_t) < 10.0) else max_t - 10.0
+                    self.axis_x.setRange(start_x, max_t + 0.5)
+            else:
+                for i, buf in enumerate(buffers):
+                    if buf:
+                        pts = self.chart_points[i]
+                        for t_sec, val in buf:
+                            pts.append(QPointF(t_sec, val))
+                            if self.chart_start_t is None:
+                                self.chart_start_t = t_sec
+            
+        if self.tabs.currentIndex() == 4 and self.processor_thread.latest_sniffed_data:
             self.bit_grid.update_data(self.processor_thread.latest_sniffed_data)
 
     def load_dbc_file(self):
@@ -991,7 +1105,7 @@ class CANViewerFullWindow(QMainWindow):
             try:
                 self.db = cantools.database.load_file(filename)
                 self.dbc_filename = os.path.basename(filename)
-                self.table_model.update_db(self.db)
+                self.processor_thread.update_db(self.db)
                 self.retranslate_ui()
                 QMessageBox.information(self, self.get_t("msg_succ"), f"{self.get_t('msg_loaded')}{self.dbc_filename}")
             except Exception as e:
@@ -1001,7 +1115,11 @@ class CANViewerFullWindow(QMainWindow):
         self.table_model.clear_data()
         self.incoming_buffer.clear()
         self.processor_thread.clear_stats()
-        if CHARTS_AVAILABLE: self.series.clear()
+        self.chart_start_t = None
+        if CHARTS_AVAILABLE: 
+            for i in range(4):
+                self.chart_points[i].clear()
+                self.series_list[i].replace([])
         self.send_settings_to_thread()
 
     def toggle_pause(self):
@@ -1022,7 +1140,6 @@ class CANViewerFullWindow(QMainWindow):
         self.load_dbc_btn.setText(t["load_dbc"])
         self.channel_label.setText(t["channel"])
         self.ip_label.setText(t["ip_label"])
-        self.connect_btn.setText(t["connect_btn"])
         
         current_bus_idx = self.bus_filter_combo.currentIndex()
         self.bus_filter_combo.blockSignals(True) 
@@ -1054,8 +1171,9 @@ class CANViewerFullWindow(QMainWindow):
         self.lbl_interval.setText(t["form_interval"])
 
         if CHARTS_AVAILABLE:
-            self.plot_id_label.setText(t["plot_id"])
-            self.plot_byte_label.setText(t["plot_byte"])
+            for i in range(4):
+                self.chart_labels_id[i].setText(f"{t['plot_id']} {i+1}:")
+                self.chart_labels_b[i].setText(t["plot_byte"])
             
         self.sniffer_id_label.setText(t["sniffer_id"])
         self.send_once_btn.setText(t["btn_send_once"])
@@ -1082,7 +1200,7 @@ class CANViewerFullWindow(QMainWindow):
             payload = self.build_payload()
             success = self.tcp_thread.send_tcp_data(payload)
             if not success and not is_cyclic:
-                QMessageBox.critical(self, self.get_t("msg_net_err"), "Brak połączenia TCP z ESP32!")
+                QMessageBox.critical(self, self.get_t("msg_net_err"), "No TCP connection with ESP32!")
         except Exception as e:
             if not is_cyclic: QMessageBox.critical(self, self.get_t("msg_err"), f"{self.get_t('msg_build_err')}{e}")
 

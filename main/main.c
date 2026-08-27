@@ -9,7 +9,6 @@
 #include "esp_err.h"
 #include "esp_attr.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "driver/gpio.h"
 #include "esp_wifi.h"
 #include "nvs_flash.h"
@@ -34,7 +33,7 @@ static const char *TAG = "app_main";
 #define APP_MODE_ENABLE_SD 0
 
 #define CAN_BITRATE 1000000
-#define CAN_DATA_BITRATE 4000000
+#define CAN_DATA_BITRATE 5000000
 
 
 #define TX_PORT 3333

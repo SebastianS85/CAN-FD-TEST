@@ -1,7 +1,7 @@
 {
     "clock": "80",
     "nom_mbps": "1",
-    "data_mbps": "4",
+    "data_mbps": "5",
     "n_brp": "2",
     "n_tseg1": "31",
     "n_tseg2": "8",
