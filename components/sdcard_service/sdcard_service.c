@@ -23,7 +23,7 @@ static FILE *s_append_file = NULL;
 static char s_append_path[96] = {0};
 static SemaphoreHandle_t s_sd_mutex = NULL;
 
-// Bufor RAM do optymalizacji zapisu strumieniowego dla plików tekstowych
+
 #define SD_FILE_BUFFER_SIZE 512
 static char s_file_buffer[SD_FILE_BUFFER_SIZE];
 
@@ -55,14 +55,14 @@ esp_err_t sdcard_service_mount(const sdcard_service_config_t *config, sdmmc_card
         ESP_RETURN_ON_FALSE(s_sd_mutex != NULL, ESP_ERR_NO_MEM, TAG, "Failed to create SD mutex");
     }
 
-    // Wymuszenie sprzętowych rezystorów Pull-Up
+    
     gpio_set_pull_mode(config->pin_mosi, GPIO_PULLUP_ONLY);
     gpio_set_pull_mode(config->pin_miso, GPIO_PULLUP_ONLY);
     gpio_set_pull_mode(config->pin_sclk, GPIO_PULLUP_ONLY);
     gpio_set_pull_mode(config->pin_cs, GPIO_PULLUP_ONLY);
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    // Inicjalizacja magistrali SPI (z włączonym DMA!)
+    
     spi_bus_config_t bus_cfg = {
         .mosi_io_num = config->pin_mosi,
         .miso_io_num = config->pin_miso,
@@ -74,7 +74,7 @@ esp_err_t sdcard_service_mount(const sdcard_service_config_t *config, sdmmc_card
 
     ESP_RETURN_ON_ERROR(spi_bus_initialize(config->host_id, &bus_cfg, SDSPI_DEFAULT_DMA), TAG, "spi_bus_initialize failed");
 
-    // Konfiguracja hosta
+    
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = config->host_id;
     host.unaligned_multi_block_rw_max_chunk_size = 8; 
@@ -192,8 +192,8 @@ esp_err_t sdcard_service_append_text(const char *relative_path, const char *text
         strlcpy(s_append_path, path, sizeof(s_append_path));
     }
 
-    // POPRAWKA: Usunięto sprzętowe wymuszanie zapisu (fflush) po każdym fputs,
-    // co zapobiega ciągłemu katowaniu karty SD i drastycznie zwiększa wydajność.
+    
+    
     if (fputs(text, s_append_file) < 0) {
         fclose(s_append_file);
         s_append_file = NULL;
@@ -206,7 +206,7 @@ esp_err_t sdcard_service_append_text(const char *relative_path, const char *text
     return ESP_OK;
 }
 
-// NOWA FUNKCJA: Superszybki, surowy zapis binarny bloków (np. 4 KB)
+
 esp_err_t sdcard_service_append_bin_block(const char *relative_path, const void *data, size_t size)
 {
     ESP_RETURN_ON_FALSE(s_mounted, ESP_ERR_INVALID_STATE, TAG, "sdcard not mounted");
@@ -219,7 +219,7 @@ esp_err_t sdcard_service_append_bin_block(const char *relative_path, const void 
         return ESP_ERR_TIMEOUT;
     }
 
-    // Otwieramy w trybie binarnego dopisywania ("ab")
+    
     if (s_append_file == NULL || strcmp(s_append_path, path) != 0) {
         if (s_append_file != NULL) {
             fclose(s_append_file);
@@ -233,11 +233,11 @@ esp_err_t sdcard_service_append_bin_block(const char *relative_path, const void 
             return ESP_FAIL;
         }
         
-        // Zapisujemy ścieżkę, aby unikać wielokrotnego otwierania pliku
+        
         strlcpy(s_append_path, path, sizeof(s_append_path));
     }
 
-    // Bezpośredni strumień binarny DMA na kartę
+    
     size_t written = fwrite(data, 1, size, s_append_file);
     
     if (written != size) {
@@ -302,8 +302,8 @@ esp_err_t sdcard_service_sync(void)
 {
     if (xSemaphoreTake(s_sd_mutex, portMAX_DELAY) == pdTRUE) {
         if (s_append_file != NULL) {
-            fflush(s_append_file);         // Wypycha wewnętrzny bufor języka C
-            fsync(fileno(s_append_file));  // Sprzętowo aktualizuje FAT (rozmiar pliku)
+            fflush(s_append_file);         
+            fsync(fileno(s_append_file));  
         }
         xSemaphoreGive(s_sd_mutex);
     }

@@ -20,4 +20,4 @@ esp_err_t can_logger_init(const can_logger_config_t *config);
 void can_logger_request_stop(void);
 bool can_logger_is_stop_requested(void);
 
-#endif // CAN_LOGGER_H
+#endif 

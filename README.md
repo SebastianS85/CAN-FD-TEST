@@ -24,6 +24,7 @@ The host-side Python client used to receive and monitor frames is located in
 - SD-card data currently written as raw binary log files; decode helper is in `can_sd_decode.py`.
 
 ## Hardware
+<img width="711" height="624" alt="image" src="https://github.com/user-attachments/assets/fa8cd841-c782-47a9-b497-dfd896d87813" />
 
 The firmware targets an **ESP32-C5** development board or custom board with:
 
@@ -238,7 +239,4 @@ can_sd_decode.py           Decoder for raw binary SD-card CAN logs
 - The SD-card component is present, but it is not mounted by the current
   `app_main`.
 
-## License
 
-No license has been selected for this repository yet. Add a license before
-accepting external contributions or redistributing the project.

@@ -20,7 +20,7 @@ static void udp_sender_task(void *pvParameters) {
 
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
 
-    // Increase socket send buffer to avoid drops under heavy load
+    
     int sndbuf = 32 * 1024;
     setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
 

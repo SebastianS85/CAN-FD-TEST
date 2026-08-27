@@ -20,4 +20,4 @@ typedef struct {
 
 esp_err_t app_buffers_init(const app_buffers_config_t *config, app_buffers_t *out_bufs);
 
-#endif // APP_BUFFERS_H
+#endif 

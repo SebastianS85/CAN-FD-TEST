@@ -33,12 +33,12 @@ typedef struct {
     volatile bool recovery_in_progress;
 } twai_mgr_inst_t;
 
-// Core API
+
 esp_err_t twai_mgr_init_custom_node(twai_mgr_inst_t *inst, gpio_num_t tx_io, gpio_num_t rx_io, 
                                      twai_bus_mode_t mode, uint32_t arb_bitrate, uint32_t data_bitrate, 
                                      uint32_t queue_depth, void *user_ctx, twai_mgr_app_rx_cb_t rx_cb);
 
-// NEW: Quick shortcut initializer for standard CAN FD nodes (1Mbps / 5Mbps)
+
 esp_err_t twai_mgr_init_fd_node(twai_mgr_inst_t *inst, gpio_num_t tx_io, gpio_num_t rx_io, uint32_t queue_depth, void *user_ctx, twai_mgr_app_rx_cb_t rx_cb);
 
 esp_err_t twai_mgr_reconfigure(twai_mgr_inst_t *inst, const twai_mgr_config_t *new_cfg);

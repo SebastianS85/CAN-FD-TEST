@@ -19,4 +19,4 @@ typedef struct __attribute__((packed)) {
     uint8_t data[64];
 } udp_cmd_frame_t;
 
-#endif // APP_TYPES_H
+#endif 

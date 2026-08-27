@@ -646,10 +646,40 @@ class CANViewerFullWindow(QMainWindow):
         
         # --- PODEJŚCIE PERSYSTENTNE DLA IP ---
         self.ip_label = QLabel()
+        self.ip_label.setStyleSheet(
+            "color: #7bdcff; font-weight: bold; padding: 0 6px;"
+        )
+
         self.ip_input = QLineEdit(TCP_IP)
-        self.ip_input.setMaximumWidth(120)
+        self.ip_input.setPlaceholderText("192.168.178.45")
+        self.ip_input.setFixedWidth(150)
+        self.ip_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.ip_input.setStyleSheet(
+            "QLineEdit {"
+            "background-color: #0f1720;"
+            "color: #80ecff;"
+            "border: 1px solid #2d6cdf;"
+            "border-radius: 6px;"
+            "padding: 5px 8px;"
+            "min-height: 24px;"
+            "}"
+            "QLineEdit:focus { border: 1px solid #6ec5ff; }"
+        )
+        self.ip_input.setClearButtonEnabled(True)
         
         self.connect_btn = QPushButton()
+        self.connect_btn.setStyleSheet(
+            "QPushButton {"
+            "background-color: #1e5aa8;"
+            "color: white;"
+            "border: 1px solid #2e78d6;"
+            "border-radius: 6px;"
+            "padding: 6px 12px;"
+            "font-weight: bold;"
+            "}"
+            "QPushButton:hover { background-color: #2d6cdf; }"
+            "QPushButton:pressed { background-color: #17468f; }"
+        )
         self.connect_btn.clicked.connect(self.save_and_reconnect_ip)
         
         self.load_dbc_btn = QPushButton()

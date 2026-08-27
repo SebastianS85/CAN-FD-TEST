@@ -25,11 +25,11 @@ static void c_oled_draw_char(int x, int page, char c) {
 
 esp_err_t c_oled_init(i2c_master_bus_handle_t i2c_bus) {
     if (i2c_bus == NULL) {
-        ESP_LOGE(TAG, "Brak uchwytu magistrali I2C!");
+        ESP_LOGE(TAG, "I2C bus handle is missing!");
         return ESP_ERR_INVALID_ARG;
     }
 
-    ESP_LOGI(TAG, "Inicjalizacja panelu IO dla SSD1306...");
+    ESP_LOGI(TAG, "Initializing SSD1306 panel IO...");
     esp_lcd_panel_io_handle_t io_handle = NULL;
     esp_lcd_panel_io_i2c_config_t io_config = {
         .dev_addr = OLED_I2C_ADDR,
@@ -43,7 +43,7 @@ esp_err_t c_oled_init(i2c_master_bus_handle_t i2c_bus) {
     esp_err_t ret = esp_lcd_new_panel_io_i2c(i2c_bus, &io_config, &io_handle);
     if (ret != ESP_OK) return ret;
 
-    ESP_LOGI(TAG, "Inicjalizacja sterownika SSD1306...");
+    ESP_LOGI(TAG, "Initializing SSD1306 driver...");
     esp_lcd_panel_dev_config_t panel_config = {
         .bits_per_pixel = 1,
         .reset_gpio_num = -1,
@@ -55,12 +55,12 @@ esp_err_t c_oled_init(i2c_master_bus_handle_t i2c_bus) {
     esp_lcd_panel_reset(s_panel_handle);
     esp_lcd_panel_init(s_panel_handle);
     
-    // Obrót o 180 stopni
+    
     esp_lcd_panel_mirror(s_panel_handle, true, true);
     
     esp_lcd_panel_disp_on_off(s_panel_handle, true);
     
-    ESP_LOGI(TAG, "Gotowe!");
+    ESP_LOGI(TAG, "Ready!");
     return ESP_OK;
 }
 

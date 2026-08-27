@@ -26,4 +26,4 @@ typedef struct {
 esp_err_t app_peripherals_init(const app_peripherals_config_t *config, app_peripherals_handles_t *out_handles);
 esp_err_t sync_system_time_from_rtc(ds3231mz_t *rtc_dev);
 
-#endif // APP_PERIPHERALS_H
+#endif 

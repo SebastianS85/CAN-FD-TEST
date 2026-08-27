@@ -156,7 +156,7 @@ static void tx_task(void *arg)
             stats_inc(&ch->tx_fail);
         }
 
-        // Bezpieczne opóźnienie 1 tick (1ms) eliminujące błąd asercji
+        
         vTaskDelay(1);
     }
 

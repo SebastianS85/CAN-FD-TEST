@@ -13,13 +13,13 @@ extern "C" {
 #define DS3231MZ_I2C_ADDR_DEFAULT 0x68
 
 typedef struct {
-    uint16_t year;      /* Full year, e.g. 2026 */
-    uint8_t month;      /* 1-12 */
-    uint8_t date;       /* 1-31 */
-    uint8_t day;        /* 1-7 (device format) */
-    uint8_t hour;       /* 0-23 */
-    uint8_t minute;     /* 0-59 */
-    uint8_t second;     /* 0-59 */
+    uint16_t year;      
+    uint8_t month;      
+    uint8_t date;       
+    uint8_t day;        
+    uint8_t hour;       
+    uint8_t minute;     
+    uint8_t second;     
 } ds3231mz_datetime_t;
 
 typedef struct {
