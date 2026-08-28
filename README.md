@@ -4,8 +4,6 @@ An ESP-IDF application for the ESP32-C5 that bridges two on-chip TWAI-FD
 controllers to a Wi-Fi-connected host over a socket-based connection. The
 firmware also provides a small I2C status panel, RTC timekeeping, queue/drop
 statistics, and an optional high-rate CAN FD traffic generator for bus testing.
-![alt text](PXL_20260826_152152717.jpg)
-
 The host-side Python client used to receive and monitor frames is located in
 `can_analyser.py`. The SD-card raw log decoder is located in `can_sd_decode.py`.
 
