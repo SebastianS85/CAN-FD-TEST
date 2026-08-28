@@ -142,7 +142,7 @@ QPushButton#btnStopCyclic:hover { background-color: #f85149; }
 QPushButton#btnExport { background-color: #d28e00; color: #111; border: 1px solid #b87a00; }
 QPushButton#btnExport:hover { background-color: #e5a417; }
 QPushButton:disabled { background-color: #181818; color: #555555; border: 1px solid #242424; }
-QLineEdit, QComboBox { background-color: #141414; color: #00dd99; border: 1px solid #333333; border-radius: 4px; padding: 4px; }
+QLineEdit, QComboBox { background-color: #141414; color: #00dd99; border: 1px solid #333333; border-radius: 3px; padding: 4px; }
 QTabWidget::pane { border: 1px solid #333333; background-color: #161616; }
 QTabBar::tab { background-color: #222222; color: #999999; padding: 6px 14px; border-top-left-radius: 3px; border-top-right-radius: 3px; margin-right: 2px; }
 QTabBar::tab:selected { background-color: #2c2c2c; color: #ffffff; font-weight: bold; }
@@ -177,7 +177,7 @@ def len_to_dlc(length):
 class BitGridWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(400, 600)
+        self.setMinimumSize(400, 2000)
         self.current_data = bytearray()
         self.max_bytes = 64
         self.fade_levels = [[0.0 for _ in range(8)] for _ in range(self.max_bytes)]
@@ -486,7 +486,6 @@ class DataProcessorThread(QThread):
                             if node_id == 1: self.bus1_count += 1
                             elif node_id == 2: self.bus2_count += 1
 
-                            # Multi-Chart Capture
                             for idx, (t_id, t_byte) in enumerate(self.chart_targets):
                                 if t_id != -1 and clean_id == t_id and 0 <= t_byte < actual_len:
                                     self.chart_buffers[idx].append((timestamp / 1000.0, raw_data[t_byte]))
@@ -784,7 +783,6 @@ class CANViewerFullWindow(QMainWindow):
             self.chart.setTheme(QChart.ChartTheme.ChartThemeDark)
             self.chart.setBackgroundVisible(False)
             
-            # MASKI OCHRONNE NA POLA
             hex_validator = QRegularExpressionValidator(QRegularExpression("[0-9A-Fa-f]{1,8}"))
             byte_validator = QRegularExpressionValidator(QRegularExpression("^[0-9]$|^[1-5][0-9]$|^6[0-3]$"))
 
@@ -1069,19 +1067,17 @@ class CANViewerFullWindow(QMainWindow):
                             max_t = pts[-1].x()
                 
                 if max_t is not None:
-                    # Dynamiczne odrzucanie starych punktow (powyzej 10s od najnowszego)
                     for i in range(4):
                         pts = self.chart_points[i]
                         while len(pts) > 0 and pts[0].x() < max_t - 10.0:
                             pts.popleft()
                         
-                        while len(pts) > 5000: # Ostateczne zabezpieczenie pamiêci
+                        while len(pts) > 5000:
                             pts.popleft()
                             
                         if len(pts) > 0:
                             self.series_list[i].replace(list(pts))
                     
-                    # Plynne sledzenie X-osi, startujace od lewej krawedzi
                     start_x = self.chart_start_t if (self.chart_start_t is not None and (max_t - self.chart_start_t) < 10.0) else max_t - 10.0
                     self.axis_x.setRange(start_x, max_t + 0.5)
             else:

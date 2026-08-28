@@ -37,6 +37,12 @@ The firmware targets an **ESP32-C5** development board or custom board with:
 
 See [PINOUT.md](PINOUT.md) for the complete connection table and electrical
 notes.
+## Hardware Availability
+
+The first batch of the ESP32-C5 Dual Isolated CAN-FD board is available for purchase at the following stores:
+
+* [Get it on Lectronz](https://lectronz.com/products/esp32-c5-dual-isolated-can-fd-board-first-batch)
+* [Get it on Tindie](https://www.tindie.com/products/smuqdev/esp32-c5-dual-isolated-can-fd-board-first-batch/)
 # ESP32-C5 CAN FD Gateway Pinout
 
 This table reflects the GPIO assignments currently compiled in
