@@ -266,14 +266,23 @@ class TCPReceiverThread(QThread):
         self.ip, self.port = ip, port
         self.running = True
         self.buffer_deque = buffer_deque
-        self.client_socket = None
+        self.rx_socket = None
+        self.tx_socket = None
 
     def update_ip(self, new_ip):
         if self.ip != new_ip:
             self.ip = new_ip
-            if self.client_socket:
-                try: self.client_socket.close()
-                except: pass
+            self.close_sockets()
+
+    def close_sockets(self):
+        if self.rx_socket:
+            try: self.rx_socket.close()
+            except: pass
+            self.rx_socket = None
+        if self.tx_socket:
+            try: self.tx_socket.close()
+            except: pass
+            self.tx_socket = None
 
     def run(self):
         logging.info(f"TCP client thread started. Target: {self.ip}:{self.port}")
@@ -281,33 +290,29 @@ class TCPReceiverThread(QThread):
         while self.running:
             self.connection_status.emit(False, "SEARCHING...")
             try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                sock.settimeout(2.0)
-                sock.connect((self.ip, self.port))
+                # --- ODBIÓR DANYCH Z ESP32 (Port 3333) ---
+                sock_rx = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock_rx.settimeout(2.0)
+                sock_rx.connect((self.ip, self.port))
                 
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-                if sys.platform == 'win32':
-                    sock.ioctl(socket.SIO_KEEPALIVE_VALS, (1, 3000, 1000))
-                else:
-                    try:
-                        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 3)
-                        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 1)
-                        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3)
-                    except AttributeError:
-                        pass
-
-                sock.settimeout(2.0)
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                # --- WYSYŁANIE KOMEND DO ESP32 (Port 3334) ---
+                sock_tx = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock_tx.settimeout(2.0)
+                sock_tx.connect((self.ip, self.port + 1))
                 
-                self.client_socket = sock
+                sock_tx.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                
+                self.rx_socket = sock_rx
+                self.tx_socket = sock_tx
+                
                 self.connection_status.emit(True, "CONNECTED")
-                logging.info(f"Connected to ESP32 at {self.ip}!")
+                logging.info(f"Connected to ESP32 at {self.ip} (RX: {self.port}, TX: {self.port+1})")
 
                 stream_buffer = bytearray()
                 
                 while self.running:
                     try:
-                        chunk = sock.recv(1024 * 64) 
+                        chunk = self.rx_socket.recv(1024 * 64) 
                         if not chunk: 
                             logging.warning("ESP32 closed connection.")
                             break 
@@ -324,20 +329,22 @@ class TCPReceiverThread(QThread):
                         logging.error(f"TCP stream error: {e}")
                         break
                         
-                sock.close()
-                self.client_socket = None
+                self.close_sockets()
                 logging.warning("Disconnected from ESP32. Retrying...")
+                
             except (socket.timeout, ConnectionRefusedError, OSError):
+                self.close_sockets()
                 time.sleep(1.0)
                 continue
             except Exception as e:
+                self.close_sockets()
                 logging.error(f"TCP Error: {e}")
                 time.sleep(1.0)
 
     def send_tcp_data(self, payload):
-        if self.client_socket:
+        if self.tx_socket:
             try:
-                self.client_socket.sendall(payload)
+                self.tx_socket.sendall(payload)
                 return True
             except Exception as e:
                 logging.error(f"TX error: {e}")
@@ -345,9 +352,7 @@ class TCPReceiverThread(QThread):
 
     def stop(self):
         self.running = False
-        if self.client_socket:
-            try: self.client_socket.close()
-            except: pass
+        self.close_sockets()
         self.wait()
 
 class CyclicSenderThread(QThread):

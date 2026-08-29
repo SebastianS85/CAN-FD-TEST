@@ -68,7 +68,7 @@ app_mode_t g_active_app_mode = APP_MODE_BRIDGE_ONLY;
 #define FRAMES_PER_PACKET 40
 #define SD_BLOCK_SIZE (16 * 1024)
 
-#define DRIVER_TX_QUEUE_DEPTH 256
+#define DRIVER_TX_QUEUE_DEPTH 512
 #define EJECT_BTN_PIN GPIO_NUM_28
 
 typedef struct __attribute__((packed))
@@ -323,10 +323,29 @@ void tcp_receiver_task(void *pvParameters)
         vTaskDelay(pdMS_TO_TICKS(500));
 
     int listen_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+    if (listen_sock < 0) {
+        ESP_LOGE("TCP_RX", "Unable to create socket");
+        vTaskDelete(NULL);
+    }
+
+    // Zapobiega blokowaniu portu przy szybkich restartach skryptu Pythona
+    int opt = 1;
+    setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
     struct sockaddr_in listen_addr = {.sin_family = AF_INET, .sin_port = htons(RX_PORT)};
     listen_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    bind(listen_sock, (struct sockaddr *)&listen_addr, sizeof(listen_addr));
+    
+    if (bind(listen_sock, (struct sockaddr *)&listen_addr, sizeof(listen_addr)) < 0) {
+        ESP_LOGE("TCP_RX", "Socket unable to bind");
+        vTaskDelete(NULL);
+    }
     listen(listen_sock, 1);
+
+    ESP_LOGI("TCP_RX", "TCP receiver ready on port %d", RX_PORT);
+
+    #define RX_BUF_COUNT 16
+    tcp_cmd_frame_t cmd_array[RX_BUF_COUNT];
+    uint8_t cmd_idx = 0;
 
     while (1)
     {
@@ -339,31 +358,70 @@ void tcp_receiver_task(void *pvParameters)
             continue;
         }
 
+        ESP_LOGI("TCP_RX", "PC Connected for sending CAN frames");
+
         int nodelay = 1;
         setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
-        tcp_cmd_frame_t cmd;
-        uint8_t *rx_buf = (uint8_t *)&cmd;
+        // NOWOŚĆ: Ustawienie Timeoutu na 1 sekundę
+        struct timeval tv;
+        tv.tv_sec = 1; 
+        tv.tv_usec = 0;
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
         int rx_bytes = 0;
 
         while (1)
         {
-            int len = recv(sock, rx_buf + rx_bytes, sizeof(cmd) - rx_bytes, 0);
-            if (len <= 0)
-                break;
+            tcp_cmd_frame_t *cmd = &cmd_array[cmd_idx];
+            uint8_t *rx_buf = (uint8_t *)cmd;
 
+            int len = recv(sock, rx_buf + rx_bytes, sizeof(tcp_cmd_frame_t) - rx_bytes, 0);
+            
+            if (len < 0) {
+                // Jeśli błędem jest po prostu Timeout (minęła 1 sekunda i brak danych)
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    // Sprawdzamy czy nie urwało nam Wi-Fi
+                    if (!network_ready) {
+                        ESP_LOGW("TCP_RX", "Wi-Fi lost, closing connection.");
+                        break; 
+                    }
+                    // Nic nie transmitowano, Wi-Fi jest OK - wracamy do nasłuchu
+                    continue;
+                } else {
+                    ESP_LOGE("TCP_RX", "Socket error: %d", errno);
+                    break;
+                }
+            } 
+            else if (len == 0) {
+                // PC poprawnie i intencjonalnie zamknął połączenie
+                ESP_LOGW("TCP_RX", "Connection gracefully closed by PC");
+                break;
+            }
+
+            // Jeśli odebrano jakiekolwiek dane:
             rx_bytes += len;
-            if (rx_bytes == sizeof(cmd))
+            if (rx_bytes == sizeof(tcp_cmd_frame_t))
             {
-                rx_bytes = 0;
-                uint8_t safe_dlc = twai_mgr_bound_dlc(cmd.dlc);
+                rx_bytes = 0; // Zresetuj bufor, bo mamy pełną ramkę
+                
+                uint8_t safe_dlc = twai_mgr_bound_dlc(cmd->dlc);
                 twai_frame_t tx_frame = {
                     .header = {
-                        .id = cmd.id & 0x1FFFFFFFU, .ide = (cmd.id & 0x80000000U) ? 1 : 0, .fdf = TWAI_USE_FD_FRAMES, .brs = TWAI_USE_FD_FRAMES ? 1 : 0, .esi = 0, .dlc = TWAI_USE_FD_FRAMES ? safe_dlc : ((safe_dlc > 8) ? 8 : safe_dlc)},
-                    .buffer = cmd.data,
-                    .buffer_len = TWAI_USE_FD_FRAMES ? twai_mgr_dlc_to_len(safe_dlc) : ((twai_mgr_dlc_to_len(safe_dlc) > 8) ? 8 : twai_mgr_dlc_to_len(safe_dlc))};
+                        .id = cmd->id & 0x1FFFFFFFU, 
+                        .ide = (cmd->id & 0x80000000U) ? 1 : 0, 
+                        .fdf = TWAI_USE_FD_FRAMES, 
+                        .brs = TWAI_USE_FD_FRAMES ? 1 : 0, 
+                        .esi = 0, 
+                        .dlc = TWAI_USE_FD_FRAMES ? safe_dlc : ((safe_dlc > 8) ? 8 : safe_dlc)
+                    },
+                    .buffer = cmd->data,
+                    .buffer_len = TWAI_USE_FD_FRAMES ? twai_mgr_dlc_to_len(safe_dlc) : ((twai_mgr_dlc_to_len(safe_dlc) > 8) ? 8 : twai_mgr_dlc_to_len(safe_dlc))
+                };
 
-                twai_mgr_inst_t *target_node = (cmd.node_id == 1) ? &node1 : &node2;
+                // Ustalenie odpowiedniego węzła
+                twai_mgr_inst_t *target_node = (cmd->node_id == 1 || cmd->node_id == 0) ? &node1 : &node2;
+                
                 if (!target_node->recovery_in_progress)
                 {
                     int retries = 0;
@@ -374,18 +432,18 @@ void tcp_receiver_task(void *pvParameters)
                     }
                     if (retries <= 50)
                     {
-                        if (cmd.node_id == 1)
-                            g_tx_frames_node1++;
-                        else
-                            g_tx_frames_node2++;
+                        if (target_node == &node1) g_tx_frames_node1++;
+                        else g_tx_frames_node2++;
                     }
                 }
+
+               
+                cmd_idx = (cmd_idx + 1) % RX_BUF_COUNT;
             }
         }
         close(sock);
     }
 }
-
 void twai_health_task(void *pvParameters)
 {
     bool node1_was_recovering = false;
