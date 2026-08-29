@@ -20,6 +20,8 @@ The firmware also provides an I2C OLED status panel, DS3231MZ RTC timekeeping, P
 *   Large PSRAM-backed receive ring buffers (3 MB each) to prevent frame drops under heavy load.
 *   High-performance Python GUI utility (`can_converter.py`) using CustomTkinter to convert binary logs to `.asc` for SavvyCAN.
 
+![ESP32-C5 Dual Isolated CAN FD board](PXL_20260826_152152717.jpg)
+
 ## Hardware Availability
 
 The first batch of the ESP32-C5 Dual Isolated CAN-FD board is available for purchase at the following stores:
