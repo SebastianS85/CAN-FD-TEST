@@ -29,12 +29,19 @@
 
 static const char *TAG = "app_main";
 
-#define APP_MODE_ENABLE_TCP 1
-#define APP_MODE_ENABLE_SD 0
+typedef enum {
+    APP_MODE_BRIDGE_ONLY = 0,
+    APP_MODE_SD_LOGGER,
+    APP_MODE_TCP_SERVER
+} app_mode_t;
 
-#define CAN_BITRATE 1000000
-#define CAN_DATA_BITRATE 5000000
+app_mode_t g_active_app_mode = APP_MODE_BRIDGE_ONLY;
 
+#define CAN1_BITRATE 1000000
+#define CAN1_DATA_BITRATE 5000000
+
+#define CAN2_BITRATE 1000000
+#define CAN2_DATA_BITRATE 2000000
 
 #define TX_PORT 3333
 #define RX_PORT 3334
@@ -83,7 +90,9 @@ typedef struct __attribute__((packed))
 } tcp_cmd_frame_t;
 
 RingbufHandle_t log_ringbuf = NULL;
-#define LOG_RINGBUF_SIZE (6 * 1024 * 1024)
+RingbufHandle_t gateway_ringbuf = NULL;
+#define LOG_RINGBUF_SIZE (3 * 1024 * 1024)
+#define GATEWAY_RINGBUF_SIZE (3 * 1024 * 1024)
 
 static RingbufHandle_t create_psram_ringbuf(size_t size)
 {
@@ -114,6 +123,7 @@ static volatile uint32_t g_tx_frames_node1 = 0;
 static volatile uint32_t g_tx_frames_node2 = 0;
 
 static volatile uint32_t g_drop_log = 0;
+static volatile uint32_t g_drop_gw = 0;
 static volatile uint32_t g_tcp_rx_ok = 0;
 
 static volatile uint32_t g_rb_in = 0;
@@ -127,7 +137,9 @@ static void IRAM_ATTR eject_btn_isr_handler(void *arg)
 
 static void app_can_rx_handler(uint8_t node_id, const twai_frame_t *rx_frame, void *user_ctx)
 {
-    log_frame_t frame;
+    if (!rx_frame) return;
+
+    log_frame_t frame = {0};
 
     frame.timestamp = (uint32_t)(rx_frame->header.timestamp / 1000);
     frame.node_id = node_id;
@@ -136,20 +148,40 @@ static void app_can_rx_handler(uint8_t node_id, const twai_frame_t *rx_frame, vo
         frame.id |= 0x80000000U;
 
     frame.dlc = rx_frame->header.dlc;
+    
     uint8_t copy_len = twai_mgr_dlc_to_len(rx_frame->header.dlc);
-    memcpy(frame.data, rx_frame->buffer, (copy_len > 64) ? 64 : copy_len);
+    if (copy_len > 64) copy_len = 64;
+
+    if (rx_frame->buffer && copy_len > 0)
+    {
+        uint8_t actual_len = (rx_frame->buffer_len < copy_len) ? rx_frame->buffer_len : copy_len;
+        memcpy(frame.data, rx_frame->buffer, actual_len);
+    }
 
     BaseType_t awoken = pdFALSE;
 
-    if (g_pc_connected && log_ringbuf)
+    if (g_active_app_mode == APP_MODE_BRIDGE_ONLY)
     {
-        if (xRingbufferSendFromISR(log_ringbuf, &frame, sizeof(frame), &awoken) != pdTRUE)
+        if (node_id == 1 && gateway_ringbuf)
         {
-            g_drop_log++;
+            if (xRingbufferSendFromISR(gateway_ringbuf, &frame, sizeof(frame), &awoken) != pdTRUE)
+            {
+                g_drop_gw++;
+            }
         }
-        else
+    }
+    else
+    {
+        if (log_ringbuf)
         {
-            g_rb_in++;
+            if (xRingbufferSendFromISR(log_ringbuf, &frame, sizeof(frame), &awoken) != pdTRUE)
+            {
+                g_drop_log++;
+            }
+            else
+            {
+                g_rb_in++;
+            }
         }
     }
 
@@ -163,6 +195,45 @@ static void app_can_rx_handler(uint8_t node_id, const twai_frame_t *rx_frame, vo
         portYIELD_FROM_ISR();
 }
 
+void can_gateway_task(void *pvParameters)
+{
+    log_frame_t gw_frame;
+    size_t item_size;
+
+    while (1)
+    {
+        void *data = xRingbufferReceive(gateway_ringbuf, &item_size, portMAX_DELAY);
+        if (data != NULL)
+        {
+            memcpy(&gw_frame, data, sizeof(log_frame_t));
+            vRingbufferReturnItem(gateway_ringbuf, data);
+
+            if (!node2.recovery_in_progress)
+            {
+                uint8_t safe_dlc = twai_mgr_bound_dlc(gw_frame.dlc);
+                twai_frame_t tx_frame = {
+                    .header = {
+                        .id = gw_frame.id & 0x1FFFFFFFU, 
+                        .ide = (gw_frame.id & 0x80000000U) ? 1 : 0, 
+                        .fdf = TWAI_USE_FD_FRAMES, 
+                        .brs = TWAI_USE_FD_FRAMES ? 1 : 0, 
+                        .esi = 0, 
+                        .dlc = TWAI_USE_FD_FRAMES ? safe_dlc : ((safe_dlc > 8) ? 8 : safe_dlc)
+                    },
+                    .buffer = gw_frame.data,
+                    .buffer_len = TWAI_USE_FD_FRAMES ? twai_mgr_dlc_to_len(safe_dlc) : ((twai_mgr_dlc_to_len(safe_dlc) > 8) ? 8 : twai_mgr_dlc_to_len(safe_dlc))
+                };
+
+                esp_err_t err = twai_mgr_async_transmit(&node2, &tx_frame, 0);
+                if (err == ESP_OK)
+                {
+                    g_tx_frames_node2++;
+                }
+            }
+        }
+    }
+}
+
 void tcp_sender_task(void *pvParameters)
 {
     while (!network_ready)
@@ -170,9 +241,7 @@ void tcp_sender_task(void *pvParameters)
 
     int listen_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
     if (listen_sock < 0)
-    {
         vTaskDelete(NULL);
-    }
 
     int opt = 1;
     setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -181,7 +250,7 @@ void tcp_sender_task(void *pvParameters)
     bind(listen_sock, (struct sockaddr *)&address, sizeof(address));
     listen(listen_sock, 1);
 
-    ESP_LOGI("TCP_SERVER", "TCP server ready on port %d. Waiting for PC...", TX_PORT);
+    ESP_LOGI("TCP_SERVER", "TCP server ready on port %d", TX_PORT);
 
     log_frame_t packet_buffer[FRAMES_PER_PACKET];
     size_t item_size;
@@ -201,9 +270,7 @@ void tcp_sender_task(void *pvParameters)
         int nodelay = 1;
         setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
 
-        ESP_LOGI("TCP_SERVER", "PC connected! Opening stream...");
         g_pc_connected = true;
-
         int frame_count = 0;
         int burst_counter = 0;
 
@@ -223,7 +290,6 @@ void tcp_sender_task(void *pvParameters)
                     int err = send(sock, packet_buffer, frame_count * sizeof(log_frame_t), 0);
                     if (err < 0)
                     {
-                        ESP_LOGE("TCP_SERVER", "PC connection lost!");
                         break;
                     }
                     g_tcp_sent += frame_count;
@@ -248,7 +314,6 @@ void tcp_sender_task(void *pvParameters)
 
         g_pc_connected = false;
         close(sock);
-        ESP_LOGW("TCP_SERVER", "Disconnected. Returning to listen...");
     }
 }
 
@@ -301,14 +366,19 @@ void tcp_receiver_task(void *pvParameters)
                 twai_mgr_inst_t *target_node = (cmd.node_id == 1) ? &node1 : &node2;
                 if (!target_node->recovery_in_progress)
                 {
+                    int retries = 0;
                     while (twai_mgr_async_transmit(target_node, &tx_frame, pdMS_TO_TICKS(20)) != ESP_OK)
                     {
-                        vTaskDelay(pdMS_TO_TICKS(1));
+                        vTaskDelay(pdMS_TO_TICKS(2));
+                        if (++retries > 50) break;
                     }
-                    if (cmd.node_id == 1)
-                        g_tx_frames_node1++;
-                    else
-                        g_tx_frames_node2++;
+                    if (retries <= 50)
+                    {
+                        if (cmd.node_id == 1)
+                            g_tx_frames_node1++;
+                        else
+                            g_tx_frames_node2++;
+                    }
                 }
             }
         }
@@ -318,11 +388,30 @@ void tcp_receiver_task(void *pvParameters)
 
 void twai_health_task(void *pvParameters)
 {
+    bool node1_was_recovering = false;
+    bool node2_was_recovering = false;
+
     while (1)
     {
         twai_mgr_health_monitor(&node1);
         twai_mgr_health_monitor(&node2);
-        vTaskDelay(pdMS_TO_TICKS(200));
+
+        if (node1.recovery_in_progress && !node1_was_recovering) {
+            ESP_LOGE(TAG, "FAULT: CAN Bus 1");
+        } else if (!node1.recovery_in_progress && node1_was_recovering) {
+            ESP_LOGI(TAG, "SUCCESS: CAN Bus 1");
+        }
+
+        if (node2.recovery_in_progress && !node2_was_recovering) {
+            ESP_LOGE(TAG, "FAULT: CAN Bus 2");
+        } else if (!node2.recovery_in_progress && node2_was_recovering) {
+            ESP_LOGI(TAG, "SUCCESS: CAN Bus 2");
+        }
+
+        node1_was_recovering = node1.recovery_in_progress;
+        node2_was_recovering = node2.recovery_in_progress;
+
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
@@ -332,12 +421,11 @@ void diagnostics_task(void *pvParameters)
     {
         uint32_t in_buffer = g_rb_in - g_rb_out;
 
-        printf("[TCP AUDIT] CAN(RX): %lu | In: %lu | Out: %lu | PSRAM backlog: %lu | TCP sent: %lu\n",
+        printf("[SYSTEM] Mode: %d | RX: %lu | GW Drops: %lu | Backlog: %lu\n",
+               (int)g_active_app_mode,
                (unsigned long)g_rx_frames,
-               (unsigned long)g_rb_in,
-               (unsigned long)g_rb_out,
-               (unsigned long)in_buffer,
-               (unsigned long)g_tcp_sent);
+               (unsigned long)g_drop_gw,
+               (unsigned long)in_buffer);
 
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
@@ -362,10 +450,17 @@ void sd_writer_task(void *pvParameters)
         if (g_stop_logging)
         {
             if (current_bytes > 0)
+            {
                 sdcard_service_append_bin_block(log_filename, write_buffer, current_bytes);
+                current_bytes = 0;
+            }
             sdcard_service_sync();
             sdcard_service_unmount();
-            vTaskDelete(NULL);
+            heap_caps_free(write_buffer);
+            
+            while (1) {
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            }
         }
 
         void *data = xRingbufferReceive(log_ringbuf, &item_size, pdMS_TO_TICKS(1000));
@@ -398,21 +493,54 @@ static void oled_display_task(void *arg)
     char text_buf[48];
     while (1)
     {
+        uint8_t port_val = 0;
+        if (pcf8574_read_byte(&s_pcf8574, &port_val) == ESP_OK)
+        {
+            port_val |= 0x0F;  
+            port_val |= 0xF0;  
+
+            if (g_active_app_mode == APP_MODE_BRIDGE_ONLY) {
+                port_val &= ~(1 << 4);
+            } else if (g_active_app_mode == APP_MODE_SD_LOGGER) {
+                port_val &= ~(1 << 5);
+            } else if (g_active_app_mode == APP_MODE_TCP_SERVER) {
+                port_val &= ~(1 << 6);
+            }
+
+            pcf8574_write_byte(&s_pcf8574, port_val);
+        }
+
         c_oled_clear_buffer();
-        if (network_ready)
-            snprintf(text_buf, sizeof(text_buf), "%s", g_ip_str);
+        
+        if (g_stop_logging)
+        {
+            c_oled_draw_string(0, 0, "SD Card Ejected");
+            c_oled_draw_string(0, 2, "Safe to remove!");
+            c_oled_draw_string(0, 4, "You can power off");
+        }
         else
-            snprintf(text_buf, sizeof(text_buf), "Scanning WiFi...");
-        c_oled_draw_string(0, 0, text_buf);
+        {
+            if (g_active_app_mode == APP_MODE_BRIDGE_ONLY)
+                c_oled_draw_string(0, 0, "CAN Bridge Mode");
+            else if (g_active_app_mode == APP_MODE_SD_LOGGER)
+                c_oled_draw_string(0, 0, "SD Logger Mode");
+            else
+                c_oled_draw_string(0, 0, "TCP Server Mode");
 
-        snprintf(text_buf, sizeof(text_buf), "C1 T:%lu R:%lu", (unsigned long)g_tx_frames_node1, (unsigned long)g_rx_frames_node1);
-        c_oled_draw_string(0, 2, text_buf);
+            snprintf(text_buf, sizeof(text_buf), "C1 T:%lu R:%lu", (unsigned long)g_tx_frames_node1, (unsigned long)g_rx_frames_node1);
+            c_oled_draw_string(0, 2, text_buf);
 
-        snprintf(text_buf, sizeof(text_buf), "C2 T:%lu R:%lu", (unsigned long)g_tx_frames_node2, (unsigned long)g_rx_frames_node2);
-        c_oled_draw_string(0, 4, text_buf);
+            snprintf(text_buf, sizeof(text_buf), "C2 T:%lu R:%lu", (unsigned long)g_tx_frames_node2, (unsigned long)g_rx_frames_node2);
+            c_oled_draw_string(0, 4, text_buf);
 
-        snprintf(text_buf, sizeof(text_buf), "Drops: %lu", (unsigned long)g_drop_log);
-        c_oled_draw_string(0, 6, text_buf);
+            
+            if (g_active_app_mode == APP_MODE_TCP_SERVER && network_ready)
+                snprintf(text_buf, sizeof(text_buf), "%s", g_ip_str);
+            else
+                snprintf(text_buf, sizeof(text_buf), "GW Drops: %lu", (unsigned long)g_drop_gw);
+            
+            c_oled_draw_string(0, 6, text_buf);
+        }
 
         c_oled_update();
         vTaskDelay(pdMS_TO_TICKS(200));
@@ -433,7 +561,6 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         sprintf(g_ip_str, IPSTR, IP2STR(&event->ip_info.ip));
         network_ready = true;
-        ESP_LOGI(TAG, "Connected! IP: %s", g_ip_str);
     }
 }
 
@@ -489,9 +616,9 @@ void app_main(void)
     esp_log_level_set("esp_twai", ESP_LOG_WARN);
 
     log_ringbuf = create_psram_ringbuf(LOG_RINGBUF_SIZE);
-    if (!log_ringbuf)
+    gateway_ringbuf = create_psram_ringbuf(GATEWAY_RINGBUF_SIZE);
+    if (!log_ringbuf || !gateway_ringbuf)
     {
-        ESP_LOGE(TAG, "FATAL: Not enough PSRAM for CAN buffers! Halting.");
         abort();
     }
 
@@ -523,28 +650,45 @@ void app_main(void)
         }
         sync_system_time_from_rtc(&s_rtc);
     }
+    
     ESP_ERROR_CHECK(pcf8574_init(&s_pcf8574, i2c_bus, PCF8574_I2C_ADDR, I2C_FREQ_HZ, 50, 0xFF));
 
-    if (APP_MODE_ENABLE_SD)
+    uint8_t dip_state = 0xFF;
+    if (pcf8574_read_byte(&s_pcf8574, &dip_state) == ESP_OK)
+    {
+        if ((dip_state & (1 << 0)) == 0) {
+            g_active_app_mode = APP_MODE_BRIDGE_ONLY;
+        } 
+        else if ((dip_state & (1 << 1)) == 0) {
+            g_active_app_mode = APP_MODE_SD_LOGGER;
+        } 
+        else if ((dip_state & (1 << 2)) == 0) {
+            g_active_app_mode = APP_MODE_TCP_SERVER;
+        } 
+        else {
+            g_active_app_mode = APP_MODE_BRIDGE_ONLY;
+        }
+    }
+
+    if (g_active_app_mode == APP_MODE_SD_LOGGER)
     {
         sdcard_service_config_t sd_cfg = {
             .pin_mosi = PIN_NUM_MOSI, .pin_miso = PIN_NUM_MISO, .pin_sclk = PIN_NUM_CLK, .pin_cs = PIN_NUM_CS, .host_id = SPI2_HOST, .format_if_mount_failed = true, .max_files = 5, .mount_point = "/sdcard"};
         sdmmc_card_t *card;
         sdcard_service_mount(&sd_cfg, &card);
     }
-
-    if (APP_MODE_ENABLE_TCP)
+    else if (g_active_app_mode == APP_MODE_TCP_SERVER)
     {
         wifi_init_sta();
     }
 
     ESP_ERROR_CHECK(twai_mgr_init_custom_node(&node1, TX_PIN_NODE_1, RX_PIN_NODE_1,
-                                              TWAI_BUS_MODE_FD, CAN_BITRATE, CAN_DATA_BITRATE,
-                                              DRIVER_TX_QUEUE_DEPTH, (void *)1, app_can_rx_handler));
+                                            TWAI_BUS_MODE_FD, CAN1_BITRATE, CAN1_DATA_BITRATE,
+                                            DRIVER_TX_QUEUE_DEPTH, (void *)1, app_can_rx_handler));
 
     ESP_ERROR_CHECK(twai_mgr_init_custom_node(&node2, TX_PIN_NODE_2, RX_PIN_NODE_2,
-                                              TWAI_BUS_MODE_FD, CAN_BITRATE, CAN_DATA_BITRATE,
-                                              DRIVER_TX_QUEUE_DEPTH, (void *)2, app_can_rx_handler));
+                                            TWAI_BUS_MODE_FD, CAN2_BITRATE, CAN2_DATA_BITRATE,
+                                            DRIVER_TX_QUEUE_DEPTH, (void *)2, app_can_rx_handler));
 
     gpio_config_t btn_conf = {
         .intr_type = GPIO_INTR_NEGEDGE, .pin_bit_mask = (1ULL << EJECT_BTN_PIN), .mode = GPIO_MODE_INPUT, .pull_up_en = 1, .pull_down_en = 0};
@@ -552,11 +696,15 @@ void app_main(void)
     gpio_install_isr_service(0);
     gpio_isr_handler_add(EJECT_BTN_PIN, eject_btn_isr_handler, NULL);
 
-    if (APP_MODE_ENABLE_SD)
+    if (g_active_app_mode == APP_MODE_BRIDGE_ONLY)
+    {
+        xTaskCreatePinnedToCore(can_gateway_task, "can_gw", 3072, NULL, 3, NULL, 0);
+    }
+    else if (g_active_app_mode == APP_MODE_SD_LOGGER)
     {
         xTaskCreatePinnedToCore(sd_writer_task, "sd_tx", 4096, NULL, 2, NULL, 0);
     }
-    if (APP_MODE_ENABLE_TCP)
+    else if (g_active_app_mode == APP_MODE_TCP_SERVER)
     {
         xTaskCreatePinnedToCore(tcp_sender_task, "tcp_tx", 4096, NULL, 4, NULL, 0);
         xTaskCreatePinnedToCore(tcp_receiver_task, "tcp_rx", 4096, NULL, 4, NULL, 0);
@@ -564,6 +712,7 @@ void app_main(void)
 
     xTaskCreatePinnedToCore(twai_health_task, "twai_health", 3072, NULL, 2, NULL, 0);
     xTaskCreatePinnedToCore(diagnostics_task, "diag", 3072, NULL, 2, NULL, 0);
+    
     if (s_oled_available)
         xTaskCreatePinnedToCore(oled_display_task, "oled", 4096, NULL, 2, NULL, 0);
 }

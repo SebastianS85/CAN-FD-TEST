@@ -27,6 +27,16 @@ build/
 # Ignore local secrets file
 main/secrets.h
 
+# Local config files
+converter_config.json
+config.ini
+
+# MCP scripts
+mcp_esp_bridge.py
+mcp_esp.py
+
+
+
 
 # ESP-IDF specific build outputs
 *.bin

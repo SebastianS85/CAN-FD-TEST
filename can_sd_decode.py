@@ -1,98 +1,207 @@
-import tkinter as tk
-from tkinter import filedialog, scrolledtext
+import customtkinter as ctk
+from tkinter import filedialog
 import struct
 import os
+import threading
+import json
 import can  # Wymaga: pip install python-can
 
-# Format struktury C
+# --- KONFIGURACJA GUI ---
+ctk.set_appearance_mode("System")
+ctk.set_default_color_theme("blue")
+
+# --- FORMAT STRUKTURY C (ESP32) ---
 STRUCT_FMT = '<I B I B 64s'
 FRAME_SIZE = struct.calcsize(STRUCT_FMT)
 DLC_TO_LEN = [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64]
 
-def convert_to_asc(input_filepath):
-    # Automatycznie generuje ścieżkę do pliku wyjściowego (.asc) na podstawie wejścia
-    output_filepath = os.path.splitext(input_filepath)[0] + '.asc'
+CONFIG_FILE = "converter_config.json"
+
+# --- ZARZĄDZANIE KONFIGURACJĄ ---
+def load_config():
+    try:
+        with open(CONFIG_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        # Domyślne ścieżki w przypadku braku pliku
+        return {"last_in_dir": "E:\\", "last_out_dir": os.path.expanduser("~\\Documents")}
+
+def save_config(config_dict):
+    try:
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(config_dict, f)
+    except Exception as e:
+        print(f"Failed to save config: {e}")
+
+# Inicjalizacja konfiguracji
+app_config = load_config()
+
+# --- WĄTEK KONWERSJI ---
+def convert_to_asc_thread(input_filepath, output_dir):
+    # Generowanie nazwy pliku wyjściowego w wybranym folderze docelowym
+    base_name = os.path.basename(input_filepath)
+    out_name = os.path.splitext(base_name)[0] + '.asc'
+    output_filepath = os.path.join(output_dir, out_name)
     
-    # Wyświetlamy status początkowy
-    report = f"Otwieranie surowego pliku:\n{input_filepath}\n\n"
-    report += "Trwa konwersja do formatu ASC (SavvyCAN)...\nTo może zająć kilka sekund.\n"
-    text_area.insert(tk.END, report)
-    root.update()  # Wymusza odświeżenie okna, żeby tekst się pojawił przed ciężką pętlą
+    def log_to_gui(text):
+        def update_text():
+            text_area.configure(state="normal")
+            text_area.insert("end", text)
+            text_area.see("end")
+            text_area.configure(state="disabled")
+        app.after(0, update_text)
+
+    log_to_gui(f"Opening raw file:\n{input_filepath}\n")
+    log_to_gui(f"Destination:\n{output_filepath}\n\n")
+    log_to_gui("Converting to ASC format...\nHigh-performance mode running.\n")
 
     try:
-        # can.io.ASCWriter automatycznie generuje plik zgodny ze standardem Vector
-        with can.io.ASCWriter(output_filepath) as writer:
-            with open(input_filepath, 'rb') as f:
-                count = 0
-                while True:
-                    raw_data = f.read(FRAME_SIZE)
-                    if len(raw_data) < FRAME_SIZE:
-                        break
+        # Jeśli folder docelowy nie istnieje, stwórz go
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        count = 0
+        FRAMES_PER_CHUNK = 100000 
+        CHUNK_SIZE = FRAME_SIZE * FRAMES_PER_CHUNK
+        
+        Message = can.Message
+        unpack_iter = struct.iter_unpack
+        fmt = STRUCT_FMT
+        dlc_table = DLC_TO_LEN
+        
+        with can.io.ASCWriter(output_filepath) as writer, open(input_filepath, 'rb') as f:
+            write_msg = writer.on_message_received 
+            
+            while True:
+                chunk = f.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                
+                valid_length = (len(chunk) // FRAME_SIZE) * FRAME_SIZE
+                if valid_length == 0:
+                    break
                     
-                    timestamp_ms, node_id, can_id_raw, dlc, payload = struct.unpack(STRUCT_FMT, raw_data)
-                    
-                    is_extended = bool(can_id_raw & 0x80000000)
-                    can_id = can_id_raw & 0x1FFFFFFF
+                chunk = chunk[:valid_length]
+                
+                for ts_ms, node, raw_id, dlc, payload in unpack_iter(fmt, chunk):
                     safe_dlc = dlc if dlc <= 15 else 0
-                    data_len = DLC_TO_LEN[safe_dlc]
                     
-                    valid_data = payload[:data_len]
-                    
-                    # Tworzymy oficjalny obiekt ramki CAN FD
-                    msg = can.Message(
-                        timestamp=timestamp_ms / 1000.0,
-                        arbitration_id=can_id,
-                        is_extended_id=is_extended,
+                    write_msg(Message(
+                        timestamp=ts_ms / 1000.0,
+                        arbitration_id=raw_id & 0x1FFFFFFF,
+                        is_extended_id=bool(raw_id & 0x80000000),
                         is_rx=True,
-                        channel=node_id - 1, # Bus 0 i 1
-                        is_fd=True,          # KLUCZ: Zapobiega wywalaniu się SavvyCAN!
+                        channel=node - 1, 
+                        is_fd=True,          
                         bitrate_switch=True,
-                        data=valid_data
-                    )
-                    
-                    # Zapisujemy ramkę do pliku .asc
-                    writer.on_message_received(msg)
-                    count += 1
-                    
-        # Wypisujemy sukces do okna
-        text_area.insert(tk.END, f"\n✅ SUKCES!\n")
-        text_area.insert(tk.END, f"Zdekodowano i zabezpieczono {count} ramek CAN FD.\n")
-        text_area.insert(tk.END, f"Plik gotowy do SavvyCAN:\n{output_filepath}\n")
+                        data=payload[:dlc_table[safe_dlc]]
+                    ))
+                
+                frames_in_chunk = valid_length // FRAME_SIZE
+                count += frames_in_chunk
+                
+                log_to_gui(f"Processed {count:,} frames...\n")
+                
+        log_to_gui(f"\n✅ SUCCESS!\nDecoded and saved {count:,} CAN FD frames.\n")
+        log_to_gui(f"File ready for SavvyCAN:\n{output_filepath}\n")
         
     except Exception as e:
-        text_area.insert(tk.END, f"\n❌ Wystąpił błąd podczas konwersji:\n{e}\n")
+        log_to_gui(f"\n❌ An error occurred:\n{e}\n")
+    finally:
+        app.after(0, lambda: btn_open.configure(state="normal", text="Select .bin file to convert"))
+
+# --- AKCJE PRZYCISKÓW ---
+def change_output_dir():
+    current_out = out_var.get()
+    new_dir = filedialog.askdirectory(initialdir=current_out, title="Select Output Folder")
+    if new_dir:
+        out_var.set(new_dir)
+        app_config["last_out_dir"] = new_dir
+        save_config(app_config)
 
 def open_file():
-    # Uruchamia okno wyboru pliku na zadanym dysku E:/
+    last_in = app_config.get("last_in_dir", "E:\\")
+    if not os.path.exists(last_in):
+        last_in = "C:\\"
+
     filepath = filedialog.askopenfilename(
-        initialdir="E:\\", 
-        title="Wybierz plik .bin do konwersji",
-        filetypes=(("Pliki binarne CAN", "*.bin"), ("Wszystkie pliki", "*.*"))
+        initialdir=last_in, 
+        title="Select a .bin file to convert",
+        filetypes=(("CAN binary files", "*.bin"), ("All files", "*.*"))
     )
     
     if filepath:
-        text_area.delete(1.0, tk.END)
-        convert_to_asc(filepath)
+        # Zapisz skąd pobrano plik wejściowy
+        app_config["last_in_dir"] = os.path.dirname(filepath)
+        
+        # Upewnij się, że pole docelowe jest też zapisane (na wypadek ręcznej zmiany tekstu)
+        output_dir = out_var.get()
+        app_config["last_out_dir"] = output_dir
+        save_config(app_config)
+        
+        text_area.configure(state="normal")
+        text_area.delete("1.0", "end")
+        text_area.configure(state="disabled")
+        
+        btn_open.configure(state="disabled", text="Processing... Please wait") 
+        
+        thread = threading.Thread(target=convert_to_asc_thread, args=(filepath, output_dir), daemon=True)
+        thread.start()
 
-# --- Ustawienia okna GUI ---
-root = tk.Tk()
-root.title("CAN FD -> SavvyCAN (.asc) Converter")
-root.geometry("650x450")
-root.configure(padx=20, pady=20)
+# --- BUDOWA GŁÓWNEGO OKNA ---
+app = ctk.CTk()
+app.title("CAN FD -> SavvyCAN (.asc) Converter")
+app.geometry("750x550")
 
-title_label = tk.Label(root, text="Konwerter Logów do formatu SavvyCAN", font=("Helvetica", 16, "bold"))
-title_label.pack(pady=(0, 15))
+title_label = ctk.CTkLabel(app, text="High-Performance CAN Log Converter", font=ctk.CTkFont(size=22, weight="bold"))
+title_label.pack(pady=(20, 5))
 
-# Przycisk otwierający plik
-btn_open = tk.Button(root, text="Wybierz plik .bin z dysku E:\\", command=open_file, 
-                     font=("Helvetica", 12), bg="#2196F3", fg="white", 
-                     padx=20, pady=10, cursor="hand2")
-btn_open.pack(pady=10)
+subtitle_label = ctk.CTkLabel(app, text="Converts raw ESP32 .bin logs into Vector ASCII (.asc) format", font=ctk.CTkFont(size=14), text_color="gray")
+subtitle_label.pack(pady=(0, 20))
 
-# Okno tekstowe na raport z paskiem przewijania
-text_area = scrolledtext.ScrolledText(root, wrap=tk.WORD, font=("Consolas", 11), height=15)
-text_area.pack(expand=True, fill='both')
-text_area.insert(tk.END, "Włóż kartę SD i wybierz plik .bin, aby przekonwertować go do standardu ASC.\n")
+# --- PANEL WYBORU MIEJSCA ZAPISU ---
+out_frame = ctk.CTkFrame(app, fg_color="transparent")
+out_frame.pack(fill="x", padx=40, pady=(0, 15))
 
-# Uruchomienie pętli GUI
-root.mainloop()
+out_label = ctk.CTkLabel(out_frame, text="Save converted files to:", font=ctk.CTkFont(size=13, weight="bold"))
+out_label.pack(side="left", padx=(0, 10))
+
+# Zmienna przechowująca wybraną ścieżkę wyjściową (domyślnie pobrana z configu)
+out_var = ctk.StringVar(value=app_config.get("last_out_dir", os.path.expanduser("~\\Documents")))
+
+out_entry = ctk.CTkEntry(out_frame, textvariable=out_var, width=300)
+out_entry.pack(side="left", expand=True, fill="x", padx=(0, 10))
+
+btn_change_out = ctk.CTkButton(out_frame, text="Browse...", width=80, command=change_output_dir)
+btn_change_out.pack(side="left")
+
+# --- PRZYCISK GŁÓWNY (WYBÓR PLIKU BIN) ---
+btn_open = ctk.CTkButton(
+    app, 
+    text="Select .bin file to convert", 
+    command=open_file, 
+    font=ctk.CTkFont(size=15, weight="bold"),
+    height=45,
+    width=300,
+    corner_radius=8,
+    fg_color="#1f6aa5",
+    hover_color="#144870"
+)
+btn_open.pack(pady=(5, 20))
+
+# --- POLE LOGÓW ---
+text_area = ctk.CTkTextbox(
+    app, 
+    wrap="word", 
+    font=ctk.CTkFont(family="Consolas", size=13),
+    corner_radius=8,
+    border_width=1
+)
+text_area.pack(expand=True, fill="both", padx=20, pady=(0, 20))
+
+text_area.insert("end", "Set your destination folder above.\n")
+text_area.insert("end", "Then click 'Select .bin file' to choose a log directly from your SD card.\n\n")
+text_area.configure(state="disabled")
+
+# Uruchom pętlę programu
+app.mainloop()

@@ -1,197 +1,134 @@
-# ESP32-C5 CAN FD Gateway
+# ESP32-C5 Dual Isolated CAN FD Gateway
 
-An ESP-IDF application for the ESP32-C5 that bridges two on-chip TWAI-FD
-controllers to a Wi-Fi-connected host over a socket-based connection. The
-firmware also provides a small I2C status panel, RTC timekeeping, queue/drop
-statistics, and an optional high-rate CAN FD traffic generator for bus testing.
-The host-side Python client used to receive and monitor frames is located in
-`can_analyser.py`. The SD-card raw log decoder is located in `can_sd_decode.py`.
+An ESP-IDF application for the ESP32-C5 that acts as a versatile dual-channel CAN FD tool. It utilizes two on-chip TWAI-FD controllers and features **three dynamic, hardware-selectable operating modes**: a standalone CAN 1 ↔ CAN 2 bridge, an offline SD card logger, or a Wi-Fi TCP server for real-time PC analysis.
+
+The firmware also provides an I2C OLED status panel, DS3231MZ RTC timekeeping, PCF8574-based DIP switch mode selection with LED indicators, and hardware-safe SD card unmounting. The host-side utilities include a high-performance GUI converter (`can_converter.py`) that exports raw logs directly to Vector ASC format for **SavvyCAN**.
 
 ## Features
 
-- Two independent CAN FD channels using the ESP32-C5 TWAI peripherals.
-- 1 Mbit/s arbitration phase and 5 Mbit/s data phase.
-- CAN FD payloads up to 64 bytes.
-- Wi-Fi station mode with automatic reconnect.
-- Socket-based communication for received CAN frames and host-to-device CAN TX.
-- Python client for monitoring and analysis in `can_analyser.py`.
-- OLED status display, DS3231MZ RTC, and PCF8574 I/O expander on one I2C bus.
-- Large PSRAM-backed receive pool with separate logging and routing queues.
-- CAN health monitoring and automatic recovery after repeated error states.
-- Built-in burst traffic generator for development and stress testing.
-- SD-card data currently written as raw binary log files; decode helper is in `can_sd_decode.py`.
+*   **Three Dynamic Operating Modes** selected at boot via hardware DIP switches:
+    *   **Mode 0: Hardware Bridge** - Directly routes traffic between CAN 1 and CAN 2.
+    *   **Mode 1: SD Logger** - Captures CAN traffic directly to the SD card with RTC timestamps.
+    *   **Mode 2: TCP Server** - Hosts a Wi-Fi socket server for real-time PC monitoring/injection.
+*   **Two independent CAN FD channels** using the ESP32-C5 TWAI peripherals.
+*   Up to **5 Mbit/s** data-phase bitrates with payloads up to 64 bytes.
+*   **Hardware safe eject** button (GPIO28) to flush buffers and safely unmount the SD card without corruption.
+*   **I2C status ecosystem**:
+    *   OLED display for real-time stats, IP address, and safe-to-remove status.
+    *   PCF8574 I/O expander for reading DIP switches and driving active-low status LEDs.
+    *   DS3231MZ RTC for accurate log file timestamping.
+*   Large PSRAM-backed receive ring buffers (3 MB each) to prevent frame drops under heavy load.
+*   High-performance Python GUI utility (`can_converter.py`) using CustomTkinter to convert binary logs to `.asc` for SavvyCAN.
 
-## Hardware
-<img width="711" height="624" alt="image" src="https://github.com/user-attachments/assets/fa8cd841-c782-47a9-b497-dfd896d87813" />
-
-The firmware targets an **ESP32-C5** development board or custom board with:
-
-- Two external CAN FD transceivers. The ESP32-C5 GPIOs are logic-level TWAI
-  signals; they must not be connected directly to a CAN bus.
-- A 3.3 V I2C bus with pull-ups.
-- Optional I2C OLED, DS3231MZ RTC, and PCF8574 modules.
-- PSRAM enabled and available to the application. The receive pool allocates
-  approximately 1.1 MiB from PSRAM at startup.
-
-See [PINOUT.md](PINOUT.md) for the complete connection table and electrical
-notes.
 ## Hardware Availability
 
 The first batch of the ESP32-C5 Dual Isolated CAN-FD board is available for purchase at the following stores:
+*   [Get it on Lectronz](https://lectronz.com/products/esp32-c5-dual-isolated-can-fd-board-first-batch)
+*   [Get it on Tindie](https://www.tindie.com/products/smuqdev/esp32-c5-dual-isolated-can-fd-board-first-batch/)
 
-* [Get it on Lectronz](https://lectronz.com/products/esp32-c5-dual-isolated-can-fd-board-first-batch)
-* [Get it on Tindie](https://www.tindie.com/products/smuqdev/esp32-c5-dual-isolated-can-fd-board-first-batch/)
-# ESP32-C5 CAN FD Gateway Pinout
+## Hardware & Pinout
 
-This table reflects the GPIO assignments currently compiled in
-`main/main.c`. GPIO numbers are ESP32-C5 chip GPIO numbers, not physical pin
-numbers on a particular development board. Check the board schematic before
-wiring.
+This table reflects the GPIO assignments compiled in `main/main.c`. GPIO numbers are ESP32-C5 chip GPIO numbers.
 
-## Active Connections
+### Active Connections
 
 | Function | ESP32-C5 GPIO | Direction | Connection |
-| --- | ---: | --- | --- |
-| I2C SDA | GPIO0 | Bidirectional | OLED, DS3231MZ, and PCF8574 SDA |
-| I2C SCL | GPIO1 | Output | OLED, DS3231MZ, and PCF8574 SCL |
-| CAN node 1 TX | GPIO4 | Output | Transceiver 1 TXD / TX input |
-| CAN node 1 RX | GPIO5 | Input | Transceiver 1 RXD / RX output |
-| CAN node 2 TX | GPIO23 | Output | Transceiver 2 TXD / TX input |
-| CAN node 2 RX | GPIO24 | Input | Transceiver 2 RXD / RX output |
+| :--- | :---: | :--- | :--- |
+| I2C SDA | GPIO0 | Bidirectional | OLED, DS3231MZ, PCF8574 SDA |
+| I2C SCL | GPIO1 | Output | OLED, DS3231MZ, PCF8574 SCL |
+| CAN Node 1 TX | GPIO4 | Output | Transceiver 1 TXD |
+| CAN Node 1 RX | GPIO5 | Input | Transceiver 1 RXD |
+| CAN Node 2 TX | GPIO23 | Output | Transceiver 2 TXD |
+| CAN Node 2 RX | GPIO24 | Input | Transceiver 2 RXD |
+| SD Eject Button| GPIO28 | Input | Active-Low push button (Internal Pull-up) |
 
-## I2C Devices
+### PCF8574 I/O Expander Mapping
 
-All devices share GPIO0/GPIO1 and require compatible 3.3 V logic levels.
+The PCF8574 (`0x20`) is used to read hardware DIP switches and drive status LEDs. 
+*Note: LEDs are wired Active-Low (connected to VCC).*
 
-| Device | I2C address | Bus speed | Required signals |
-| --- | ---: | ---: | --- |
-| OLED | `0x3C` | Up to 400 kHz | SDA, SCL, 3.3 V, GND |
-| DS3231MZ | `0x68` | 400 kHz | SDA, SCL, 3.3 V, GND |
-| PCF8574 | `0x20` | 400 kHz | SDA, SCL, 3.3 V, GND |
+| PCF Pin | Function | Logic |
+| :--- | :--- | :--- |
+| **P0** | Mode Select: Bridge Only | Input (Pulled to GND when ON) |
+| **P1** | Mode Select: SD Logger | Input (Pulled to GND when ON) |
+| **P2** | Mode Select: TCP Server | Input (Pulled to GND when ON) |
+| **P4** | Status LED: Bridge Mode | Output (Active-Low / `0` = ON) |
+| **P5** | Status LED: SD Logger | Output (Active-Low / `0` = ON) |
+| **P6** | Status LED: TCP Server | Output (Active-Low / `0` = ON) |
 
-The application enables the ESP32-C5 internal I2C pull-ups. External pull-ups
-appropriate for the bus capacitance are still recommended for reliable 400 kHz
-operation.
-
-## CAN Bus Wiring
-
-The ESP32-C5 TWAI pins are digital controller pins. Each channel needs an
-external CAN or CAN FD transceiver:
-
-```text
-ESP32-C5 CAN1 TX (GPIO4)  -> Transceiver 1 TXD
-ESP32-C5 CAN1 RX (GPIO5)  <- Transceiver 1 RXD
-Transceiver 1 CANH/CANL   <-> CAN bus 1
-
-ESP32-C5 CAN2 TX (GPIO23) -> Transceiver 2 TXD
-ESP32-C5 CAN2 RX (GPIO24) <- Transceiver 2 RXD
-Transceiver 2 CANH/CANL   <-> CAN bus 2
-```
-
-Connect the ESP32-C5 and transceiver grounds together. Use 3.3 V-compatible
-transceivers unless level shifting is provided. Install 120 ohm termination at
-the two physical ends of each CAN bus, not at every node. Confirm that the
-transceiver supports CAN FD at the configured 5 Mbit/s data phase.
-
-## CAN Configuration
-
-| Channel | TX | RX | Arbitration | Data phase |
-| --- | ---: | ---: | ---: | ---: |
-| Node 1 | GPIO4 | GPIO5 | 1 Mbit/s | 5 Mbit/s |
-| Node 2 | GPIO23 | GPIO24 | 1 Mbit/s | 5 Mbit/s |
-
-Both channels use CAN FD frames with bit-rate switching enabled. The firmware
-expects an FD-capable bus and transceiver when `TWAI_USE_FD_FRAMES` is `1`.
-
-## Optional SD-Card Mapping
-
-The `sdcard_service` component defines this default SPI mapping, but the
-current application does not initialize or mount the SD card. Treat these
-signals as reserved for a future SD-card integration:
+### SD-Card SPI Mapping
 
 | SD-card SPI signal | ESP32-C5 GPIO |
-| --- | ---: |
+| :--- | :---: |
 | MOSI | GPIO8 |
 | MISO | GPIO9 |
 | SCLK | GPIO10 |
 | CS | GPIO6 |
 
-## Data Flow
+## CAN Configuration
 
-```text
-CAN transceiver 1 -> ESP32-C5 TWAI node 1 --+
-                                             +-> receive pool -> socket host client
-CAN transceiver 2 -> ESP32-C5 TWAI node 2 --+
+Both channels use CAN FD frames with bit-rate switching (BRS) enabled.
 
-Socket client / host app -> ESP32-C5 -> selected TWAI node -> CAN transceiver
-```
+| Channel | Arbitration | Data Phase |
+| :--- | :---: | :---: |
+| **CAN 1** | 1 Mbit/s | 5 Mbit/s |
+| **CAN 2** | 1 Mbit/s | 2 Mbit/s |
 
-Each received CAN frame is copied into a shared pool and made available to the
-socket-based sender and the routing/diagnostic path. Frames are sent to the host
-in batches of up to 20 records, or after a short flush timeout.
+## Operating Modes
 
-## Socket Interface
+At boot, the ESP32-C5 reads the PCF8574 P0-P2 pins. Only **one** mode is activated. 
 
-The current network values are compile-time definitions in `main/main.c`:
+1.  **Bridge Mode (P0 ON):**
+    Passes CAN frames bidirectionally between CAN 1 and CAN 2. The OLED displays bridging statistics. The network and SD card are disabled to maximize routing speed.
+2.  **SD Logger Mode (P1 ON):**
+    Logs all CAN traffic from both nodes to a raw `.bin` file on the SD card. The filename is generated using the DS3231MZ RTC (e.g., `log_20260829_174959.bin`).
+    **Safe Eject:** Pressing the button on GPIO28 flushes the remaining buffer, cleanly unmounts the FAT filesystem, and shows "Safe to remove!" on the OLED.
+3.  **TCP Server Mode (P2 ON):**
+    Connects to Wi-Fi and starts a TCP server. A host PC can connect to it to receive live frames and inject commands back onto the bus.
 
-| Setting | Current value | Meaning |
-| --- | --- | --- |
-| Destination host | `192.168.178.61` | Computer receiving CAN frames |
-| TX port | `3333` | ESP32-C5 to host |
-| RX port | `3334` | Host to ESP32-C5 |
+## Socket Interface (TCP Server Mode)
 
-The socket payload is a packed binary structure. A single record contains:
+When in TCP Server Mode, the ESP32 acts as a host and listens for incoming connections from a PC/Client.
+
+| Setting | Value | Meaning |
+| :--- | :--- | :--- |
+| Bind Address | `0.0.0.0` (Any) | ESP32 listens on its DHCP-assigned IP |
+| TX Port | `3333` | ESP32 streams CAN logs to PC |
+| RX Port | `3334` | PC sends commands to ESP32 |
+
+The socket payload is a 74-byte packed binary structure formatted as follows (`<I B I B 64s` in Python struct):
 
 | Field | Size | Description |
-| --- | ---: | --- |
+| :--- | :---: | :--- |
 | `timestamp` | 4 bytes | Milliseconds from ESP timer startup |
-| `node_id` | 1 byte | `1` or `2` |
+| `node_id` | 1 byte | `1` (CAN 1) or `2` (CAN 2) |
 | `id` | 4 bytes | CAN identifier; bit 31 marks an extended identifier |
-| `dlc` | 1 byte | CAN FD DLC code |
+| `dlc` | 1 byte | CAN FD DLC code (0-15) |
 | `data` | 64 bytes | CAN payload storage; unused bytes are unspecified |
 
-The host-to-device command uses the same field layout. Set `node_id` to `1` or
-`2` to select the CAN channel. The firmware bounds the DLC before transmission.
-The protocol is intentionally simple and currently has no version, sequence,
-endianness, or integrity field. A host implementation must use the target's
-little-endian packed representation.
+## Host-Side Utilities
 
-The Python client used for monitoring is `can_analyser.py`; it connects to the
-ESP32 through the socket interface and decodes the incoming binary payloads.
+*   **`can_converter.py`**: A high-performance Python desktop application with a CustomTkinter GUI. It converts large raw `.bin` SD card logs into standard Vector ASCII (`.asc`) format. This format can be imported natively into **SavvyCAN** for reverse engineering and analysis. *Requires: `pip install python-can customtkinter`*.
+*   **`can_analyser.py`**: A Python script that connects to the ESP32 over TCP Wi-Fi for real-time monitoring.
 
-## Traffic Generator
+## Building and Flashing
 
-The generator is enabled by default in `main/main.c`. Every two seconds it
-attempts a burst of 1,000 64-byte CAN FD frames on each channel, using IDs
-`0x55` and `0x66`, respectively. Payload bytes alternate between `0xAA` and
-`0x55`.
+### 1. Prerequisites & Partition Table
+- ESP-IDF **6.0.2** (or a compatible 6.x release).
+- PSRAM must be enabled in `menuconfig`.
+- Due to the application's complexity, the default 1 MB application partition is too small. You must use a custom partition table.
 
-Disable it by changing `enable_test_generator` to `false` before building. The
-generator is intended for a correctly terminated test bus with a receiving
-node; it should not be enabled on an unprepared live network.
+Create a `partitions.csv` file in your project root:
+```csv
+# Name,   Type, SubType, Offset,  Size, Flags
+nvs,      data, nvs,     ,        0x6000,
+phy_init, data, phy,     ,        0x1000,
+factory,  app,  factory, ,        3M,
+```
 
-## Display and Diagnostics
+### 2. Configure Wi-Fi
 
-When an OLED is detected at I2C address `0x3C`, it displays the device IP,
-RTC time, receive/transmit rates, and dropped-frame count. The serial monitor
-prints one diagnostic line per second with frame rates, queue drops, generator
-transmissions, UDP transmissions, and CAN error counters.
-
-The DS3231MZ uses address `0x68`; the PCF8574 uses address `0x20`. RTC time is
-initialized to a compile-time default after a detected power loss.
-
-## Prerequisites
-
-- ESP-IDF **6.0.2** (or a compatible ESP-IDF 6.x release with ESP32-C5 TWAI-FD
-  support).
-- ESP-IDF tools installed and exported in the shell.
-- An ESP32-C5 board with PSRAM configured and two CAN FD transceivers.
-- A Wi-Fi access point using WPA2-PSK.
-
-## Configure Wi-Fi
-
-Create `main/secrets.h` locally. This file is ignored by Git:
-
+Create `main/secrets.h` with your Wi-Fi credentials:
 ```c
 #pragma once
 
@@ -199,48 +136,19 @@ Create `main/secrets.h` locally. This file is ignored by Git:
 #define WIFI_PASS "your-network-password"
 ```
 
-Never commit real credentials. If credentials have been exposed publicly,
-rotate the Wi-Fi password before publishing the repository.
-
-## Build and Flash
-
-From an ESP-IDF PowerShell or command prompt:
-
-```powershell
-idf.py set-target esp32c5
-idf.py build
-idf.py -p COM_PORT flash monitor
+### 3. Project layout
 ```
-
-Replace `COM_PORT` with the serial port for the board, for example `COM7`.
-The generated `build/` directory and local `sdkconfig` are intentionally
-ignored and should not be uploaded to GitHub.
-
-## Project Layout
-
-```text
-main/                      Application entry point and network configuration
+main/                      Application entry point and core task routing
 components/twai_manager/   Reusable TWAI/TWAI-FD node manager and recovery
-components/twai_fd_stress/ Standalone dual-channel stress-test component
 components/c_oled/         SSD1306-style I2C OLED helper
 components/ds3231mz/       DS3231MZ RTC driver
-components/pcf8574/        PCF8574 I/O-expander driver
-components/sdcard_service/ Optional SD-card service and default SPI mapping
-can_analyser.py            Host-side Python client for socket monitoring
-can_sd_decode.py           Decoder for raw binary SD-card CAN logs
+components/pcf8574/        PCF8574 I/O-expander driver (DIP + LEDs)
+components/sdcard_service/ SD-card service and FAT mounting
+can_converter.py           High-performance CustomTkinter GUI for SavvyCAN (.asc) conversion
+can_analyser.py            Host-side Python client for real-time TCP socket monitoring
+partitions.csv             Custom partition layout for 3MB app size
 ```
 
-## Current Limitations
+## Disclaimer
 
-- Wi-Fi credentials, socket destination, and CAN bit rates are compile-time
-  settings rather than menuconfig options.
-- The socket link is unauthenticated; use it only on a trusted network or add
-  an application-level security layer.
-- The CAN bus requires external transceivers, correct common ground, and
-  termination at the two physical ends of each bus.
-- The SD-card data is currently written in binary format and is decoded with the
-  helper script in `can_sd_decode.py`.
-- The SD-card component is present, but it is not mounted by the current
-  `app_main`.
-
-
+This software is provided "as is", without warranty of any kind, express or implied. Use it at your own risk. The author takes no responsibility for any damage, data loss, hardware failure, or other issues that may result from using this project.
