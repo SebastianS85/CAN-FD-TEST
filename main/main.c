@@ -33,7 +33,7 @@ void app_main(void)
 {
 
 
-
+    
     vTaskDelay(pdMS_TO_TICKS(1000));
     nvs_flash_init();
     esp_log_level_set("esp_twai", ESP_LOG_WARN);
@@ -57,15 +57,6 @@ void app_main(void)
     };
     ESP_ERROR_CHECK(app_peripherals_init(&peripherals_config));
     app_peripherals_handles_t *peripherals = app_peripherals_get_handles();
-    ESP_ERROR_CHECK(app_peripherals_set_datetime(
-    2026,  // year
-    9,     // month
-    1,     // day of month
-    2,     // day of week
-    17,    // hour
-    56,    // minute
-    0      // second
-));
 
     uint8_t dip_state = 0xFF;
     if (pcf8574_read_byte(&peripherals->pcf8574, &dip_state) == ESP_OK)

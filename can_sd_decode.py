@@ -4,26 +4,26 @@ import struct
 import os
 import threading
 import json
-import can  # Wymaga: pip install python-can
+import can  
 
-# --- KONFIGURACJA GUI ---
+
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
 
-# --- FORMAT STRUKTURY C (ESP32) ---
+
 STRUCT_FMT = '<I B I B 64s'
 FRAME_SIZE = struct.calcsize(STRUCT_FMT)
 DLC_TO_LEN = [0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64]
 
 CONFIG_FILE = "converter_config.json"
 
-# --- ZARZĄDZANIE KONFIGURACJĄ ---
+
 def load_config():
     try:
         with open(CONFIG_FILE, "r") as f:
             return json.load(f)
     except Exception:
-        # Domyślne ścieżki w przypadku braku pliku
+       
         return {"last_in_dir": "E:\\", "last_out_dir": os.path.expanduser("~\\Documents")}
 
 def save_config(config_dict):
@@ -33,12 +33,12 @@ def save_config(config_dict):
     except Exception as e:
         print(f"Failed to save config: {e}")
 
-# Inicjalizacja konfiguracji
+
 app_config = load_config()
 
-# --- WĄTEK KONWERSJI ---
+
 def convert_to_asc_thread(input_filepath, output_dir):
-    # Generowanie nazwy pliku wyjściowego w wybranym folderze docelowym
+   
     base_name = os.path.basename(input_filepath)
     out_name = os.path.splitext(base_name)[0] + '.asc'
     output_filepath = os.path.join(output_dir, out_name)
@@ -56,7 +56,7 @@ def convert_to_asc_thread(input_filepath, output_dir):
     log_to_gui("Converting to ASC format...\nHigh-performance mode running.\n")
 
     try:
-        # Jeśli folder docelowy nie istnieje, stwórz go
+        
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
@@ -110,7 +110,7 @@ def convert_to_asc_thread(input_filepath, output_dir):
     finally:
         app.after(0, lambda: btn_open.configure(state="normal", text="Select .bin file to convert"))
 
-# --- AKCJE PRZYCISKÓW ---
+
 def change_output_dir():
     current_out = out_var.get()
     new_dir = filedialog.askdirectory(initialdir=current_out, title="Select Output Folder")
@@ -131,10 +131,10 @@ def open_file():
     )
     
     if filepath:
-        # Zapisz skąd pobrano plik wejściowy
+       
         app_config["last_in_dir"] = os.path.dirname(filepath)
         
-        # Upewnij się, że pole docelowe jest też zapisane (na wypadek ręcznej zmiany tekstu)
+        
         output_dir = out_var.get()
         app_config["last_out_dir"] = output_dir
         save_config(app_config)
@@ -148,7 +148,7 @@ def open_file():
         thread = threading.Thread(target=convert_to_asc_thread, args=(filepath, output_dir), daemon=True)
         thread.start()
 
-# --- BUDOWA GŁÓWNEGO OKNA ---
+
 app = ctk.CTk()
 app.title("CAN FD -> SavvyCAN (.asc) Converter")
 app.geometry("750x550")
@@ -159,14 +159,14 @@ title_label.pack(pady=(20, 5))
 subtitle_label = ctk.CTkLabel(app, text="Converts raw ESP32 .bin logs into Vector ASCII (.asc) format", font=ctk.CTkFont(size=14), text_color="gray")
 subtitle_label.pack(pady=(0, 20))
 
-# --- PANEL WYBORU MIEJSCA ZAPISU ---
+
 out_frame = ctk.CTkFrame(app, fg_color="transparent")
 out_frame.pack(fill="x", padx=40, pady=(0, 15))
 
 out_label = ctk.CTkLabel(out_frame, text="Save converted files to:", font=ctk.CTkFont(size=13, weight="bold"))
 out_label.pack(side="left", padx=(0, 10))
 
-# Zmienna przechowująca wybraną ścieżkę wyjściową (domyślnie pobrana z configu)
+
 out_var = ctk.StringVar(value=app_config.get("last_out_dir", os.path.expanduser("~\\Documents")))
 
 out_entry = ctk.CTkEntry(out_frame, textvariable=out_var, width=300)
@@ -175,7 +175,7 @@ out_entry.pack(side="left", expand=True, fill="x", padx=(0, 10))
 btn_change_out = ctk.CTkButton(out_frame, text="Browse...", width=80, command=change_output_dir)
 btn_change_out.pack(side="left")
 
-# --- PRZYCISK GŁÓWNY (WYBÓR PLIKU BIN) ---
+
 btn_open = ctk.CTkButton(
     app, 
     text="Select .bin file to convert", 
@@ -189,7 +189,7 @@ btn_open = ctk.CTkButton(
 )
 btn_open.pack(pady=(5, 20))
 
-# --- POLE LOGÓW ---
+
 text_area = ctk.CTkTextbox(
     app, 
     wrap="word", 
@@ -203,5 +203,5 @@ text_area.insert("end", "Set your destination folder above.\n")
 text_area.insert("end", "Then click 'Select .bin file' to choose a log directly from your SD card.\n\n")
 text_area.configure(state="disabled")
 
-# Uruchom pętlę programu
+
 app.mainloop()
