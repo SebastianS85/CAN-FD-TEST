@@ -4,6 +4,31 @@
 #include "esp_log.h"
 
 static const char *TAG = "app_periph";
+static app_peripherals_handles_t s_handles = {0};
+
+app_peripherals_handles_t *app_peripherals_get_handles(void) {
+    return &s_handles;
+}
+
+esp_err_t app_peripherals_set_datetime(uint16_t year, uint8_t month, uint8_t date,
+                                       uint8_t day, uint8_t hour, uint8_t minute,
+                                       uint8_t second) {
+    ds3231mz_datetime_t datetime = {
+        .year = year,
+        .month = month,
+        .date = date,
+        .day = day,
+        .hour = hour,
+        .minute = minute,
+        .second = second,
+    };
+
+    esp_err_t err = ds3231mz_set_time(&s_handles.rtc, &datetime);
+    if (err != ESP_OK) {
+        return err;
+    }
+    return sync_system_time_from_rtc(&s_handles.rtc);
+}
 
 esp_err_t sync_system_time_from_rtc(ds3231mz_t *rtc_dev) {
     ds3231mz_datetime_t dt;
@@ -34,8 +59,8 @@ esp_err_t sync_system_time_from_rtc(ds3231mz_t *rtc_dev) {
     return ESP_OK;
 }
 
-esp_err_t app_peripherals_init(const app_peripherals_config_t *config, app_peripherals_handles_t *out_handles) {
-    if (!config || !out_handles) return ESP_ERR_INVALID_ARG;
+esp_err_t app_peripherals_init(const app_peripherals_config_t *config) {
+    if (!config) return ESP_ERR_INVALID_ARG;
 
     i2c_master_bus_config_t bus_config = {
         .i2c_port = config->port,
@@ -45,27 +70,27 @@ esp_err_t app_peripherals_init(const app_peripherals_config_t *config, app_perip
         .glitch_ignore_cnt = 7,
         .flags.enable_internal_pullup = true,
     };
-    ESP_ERROR_CHECK(i2c_new_master_bus(&bus_config, &out_handles->i2c_bus));
+    ESP_ERROR_CHECK(i2c_new_master_bus(&bus_config, &s_handles.i2c_bus));
     
-    out_handles->oled_available = false;
-    if (i2c_master_probe(out_handles->i2c_bus, config->oled_addr, 50) == ESP_OK) {
-        if (c_oled_init(out_handles->i2c_bus) == ESP_OK) {
-            out_handles->oled_available = true;
+    s_handles.oled_available = false;
+    if (i2c_master_probe(s_handles.i2c_bus, config->oled_addr, 50) == ESP_OK) {
+        if (c_oled_init(s_handles.i2c_bus) == ESP_OK) {
+            s_handles.oled_available = true;
         }
     }
 
-    if (ds3231mz_init(&out_handles->rtc, out_handles->i2c_bus, 0, config->freq_hz, 50) == ESP_OK) {
+    if (ds3231mz_init(&s_handles.rtc, s_handles.i2c_bus, 0, config->freq_hz, 50) == ESP_OK) {
         bool power_lost = false;
-        ds3231mz_get_power_lost(&out_handles->rtc, &power_lost);
+        ds3231mz_get_power_lost(&s_handles.rtc, &power_lost);
         if (power_lost) {
             ds3231mz_datetime_t def_time = { .year = 2026, .month = 8, .date = 26, .day = 3, .hour = 12, .minute = 0, .second = 0 };
-            ds3231mz_set_time(&out_handles->rtc, &def_time);
-            ds3231mz_clear_power_lost(&out_handles->rtc);
+            ds3231mz_set_time(&s_handles.rtc, &def_time);
+            ds3231mz_clear_power_lost(&s_handles.rtc);
         }
-        sync_system_time_from_rtc(&out_handles->rtc);
+        sync_system_time_from_rtc(&s_handles.rtc);
     }
 
-    ESP_ERROR_CHECK(pcf8574_init(&out_handles->pcf8574, out_handles->i2c_bus, config->pcf8574_addr, config->freq_hz, 50, 0xFF));
+    ESP_ERROR_CHECK(pcf8574_init(&s_handles.pcf8574, s_handles.i2c_bus, config->pcf8574_addr, config->freq_hz, 50, 0xFF));
 
     return ESP_OK;
 }

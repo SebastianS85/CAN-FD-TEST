@@ -30,6 +30,11 @@ typedef struct {
     twai_mgr_config_t current_cfg;
     int bad_state_streak;
     uint32_t recover_count;
+    volatile uint32_t tx_queue_full_count;
+    volatile uint32_t tx_error_count;
+    void *tx_slots;
+    uint16_t tx_slot_count;
+    portMUX_TYPE tx_slot_lock;
     volatile bool recovery_in_progress;
 } twai_mgr_inst_t;
 

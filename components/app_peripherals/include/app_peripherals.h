@@ -23,7 +23,11 @@ typedef struct {
     bool oled_available;
 } app_peripherals_handles_t;
 
-esp_err_t app_peripherals_init(const app_peripherals_config_t *config, app_peripherals_handles_t *out_handles);
+esp_err_t app_peripherals_init(const app_peripherals_config_t *config);
+app_peripherals_handles_t *app_peripherals_get_handles(void);
+esp_err_t app_peripherals_set_datetime(uint16_t year, uint8_t month, uint8_t date,
+                                       uint8_t day, uint8_t hour, uint8_t minute,
+                                       uint8_t second);
 esp_err_t sync_system_time_from_rtc(ds3231mz_t *rtc_dev);
 
 #endif 

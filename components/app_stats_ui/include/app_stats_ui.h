@@ -4,14 +4,37 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "twai_manager.h"
+#include "pcf8574.h"
+
+typedef enum {
+    APP_DISPLAY_MODE_BRIDGE = 0,
+    APP_DISPLAY_MODE_SD_LOGGER,
+    APP_DISPLAY_MODE_TCP_SERVER,
+} app_display_mode_t;
+
+typedef struct {
+    volatile uint32_t rx_frames;
+    volatile uint32_t rx_frames_node1;
+    volatile uint32_t rx_frames_node2;
+    volatile uint32_t tx_frames_node1;
+    volatile uint32_t tx_frames_node2;
+    volatile uint32_t log_drops;
+    volatile uint32_t gateway_drops;
+    volatile uint32_t ringbuf_in;
+    volatile uint32_t ringbuf_out;
+    volatile uint32_t generator_tx_ok;
+    volatile uint32_t transport_drops;
+} app_stats_ui_metrics_t;
 
 typedef struct {
     bool oled_enabled;
-    twai_mgr_inst_t *node1;
-    twai_mgr_inst_t *node2;
+    pcf8574_t *pcf8574;
+    app_display_mode_t display_mode;
+    volatile app_stats_ui_metrics_t *metrics;
 } app_stats_ui_config_t;
 
 void app_stats_ui_start(const app_stats_ui_config_t *config);
+volatile app_stats_ui_metrics_t *app_stats_ui_get_metrics(void);
 
 void app_stats_inc_rx_node1(void);
 void app_stats_inc_rx_node2(void);

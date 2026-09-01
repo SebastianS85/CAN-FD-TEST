@@ -10,6 +10,7 @@ static const char *TAG = "can_logger";
 
 static volatile bool s_stop_logging = false;
 static RingbufHandle_t s_sd_ringbuf = NULL;
+static volatile uint32_t *s_ringbuf_out_count = NULL;
 static ds3231mz_t *s_rtc_dev = NULL;
 
 void can_logger_request_stop(void) {
@@ -60,6 +61,9 @@ static void sd_writer_task(void *pvParameters) {
         void *data = xRingbufferReceive(s_sd_ringbuf, &item_size, pdMS_TO_TICKS(1000));
         
         if (data != NULL) {
+            if (s_ringbuf_out_count) {
+                (*s_ringbuf_out_count)++;
+            }
             if (current_bytes + item_size > SD_BLOCK_SIZE) {
                 sdcard_service_append_bin_block(log_filename, write_buffer, current_bytes);
                 current_bytes = 0;
@@ -87,6 +91,7 @@ esp_err_t can_logger_init(const can_logger_config_t *config) {
     }
 
     s_sd_ringbuf = config->ringbuf;
+    s_ringbuf_out_count = config->ringbuf_out_count;
     s_rtc_dev = config->rtc_dev;
 
     ESP_LOGI(TAG, "Initializing SD Card...");
@@ -94,7 +99,7 @@ esp_err_t can_logger_init(const can_logger_config_t *config) {
     esp_err_t mount_err = sdcard_service_mount(&config->sd_hw_config, &card);
     if (mount_err != ESP_OK) {
         ESP_LOGE(TAG, "SD Card initialization failed! SD logger task will NOT be started.");
-        return ESP_OK;
+        return mount_err;
     }
 
     sdcard_service_run_self_test();

@@ -12,6 +12,7 @@
 typedef struct {
     gpio_num_t eject_button_pin;
     RingbufHandle_t ringbuf;
+    volatile uint32_t *ringbuf_out_count;
     ds3231mz_t *rtc_dev;
     sdcard_service_config_t sd_hw_config;
 } can_logger_config_t;

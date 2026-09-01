@@ -7,14 +7,12 @@
 #include "esp_err.h"
 
 typedef struct {
-    size_t sd_buf_size;
-    size_t udp_buf_size;
+    size_t log_buf_size;
     size_t route_buf_size;
 } app_buffers_config_t;
 
 typedef struct {
-    RingbufHandle_t sd_ringbuf;
-    RingbufHandle_t udp_ringbuf;
+    RingbufHandle_t log_ringbuf;
     RingbufHandle_t route_ringbuf;
 } app_buffers_t;
 
