@@ -434,7 +434,6 @@ class CANViewerFullWindow(QMainWindow):
             self.mode_combo.addItem("", mode_value)
 
         can_settings_layout.addStretch()
-        self.tabs.addTab(can_settings_tab, "")
 
         sniffer_tab = QWidget()
         self.sniffer_tab = sniffer_tab
@@ -454,6 +453,7 @@ class CANViewerFullWindow(QMainWindow):
         self.scroll_area.setWidgetResizable(True)
         sniffer_layout.addWidget(self.scroll_area)
         self.tabs.addTab(sniffer_tab, "")
+        self.tabs.addTab(can_settings_tab, "")
 
         self.stats_label = QLabel()
         main_layout.addWidget(self.stats_label)
@@ -785,8 +785,8 @@ class CANViewerFullWindow(QMainWindow):
         self.tabs.setTabText(1, t["tab_plots"])
         self.tabs.setTabText(2, t["tab_stats"])
         self.tabs.setTabText(3, t["tab_gen"])
-        self.tabs.setTabText(4, t["tab_can_settings"])
-        self.tabs.setTabText(5, t["tab_sniffer"])
+        self.tabs.setTabText(4, t["tab_sniffer"])
+        self.tabs.setTabText(5, t["tab_can_settings"])
         self.mode_group.setTitle(t["mode_group"])
         self.set_mode_btn.setText(t["btn_set_mode"])
         mode_labels = {APP_DISPLAY_MODE_BRIDGE: t["mode_bridge"], APP_DISPLAY_MODE_SD_LOGGER: t["mode_sd"],
