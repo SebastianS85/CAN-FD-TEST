@@ -64,8 +64,9 @@ esp_err_t app_setup_init(const char *wifi_ssid, const char *wifi_password,
         /* DIP4/A4 wired to PCF8574 P0: low enables remote mode selection from
          * the Python app. While remote is enabled, the other two switches are
          * ignored and the active mode is chosen at runtime instead of being
-         * fixed at boot. */
-        remote_enabled = (dip_state & (1 << 0)) == 0;
+         * fixed at boot. All switches high (no mode selected) also falls back
+         * to remote/TCP config mode instead of silently defaulting to bridge. */
+        remote_enabled = (dip_state & (1 << 0)) == 0 || (dip_state & 0x0F) == 0x0F;
         if (!remote_enabled) {
             if ((dip_state & (1 << 1)) == 0) {
                 app_mode = APP_DISPLAY_MODE_SD_LOGGER;
