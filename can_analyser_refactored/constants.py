@@ -56,11 +56,13 @@ def load_config():
 
 def save_config(ip, port):
     config = configparser.ConfigParser()
-    config["Network"] = {
-        "ip": ip,
-        "port": str(port)
-    }
-    with open(CONFIG_FILE, "w") as f:
+    if os.path.exists(CONFIG_FILE):
+        config.read(CONFIG_FILE)
+    if not config.has_section("Network"):
+        config.add_section("Network")
+    config["Network"]["ip"] = ip
+    config["Network"]["port"] = str(port)
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         config.write(f)
 
 TCP_IP, TCP_PORT = load_config()
@@ -68,14 +70,24 @@ TCP_IP, TCP_PORT = load_config()
 HEADER_FORMAT = "<IBIB"
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 FRAME_SIZE = 74  # Strict size of log_frame_t from ESP32
+CAN_CONFIG_MAGIC = 0x314E4143
+CAN_CONTROL_FORMAT = "<IBIIB"
+TCP_PACKET_HEADER_FORMAT = "<BH"
+TCP_PACKET_TYPE_CAN_FRAME = 1
+TCP_PACKET_TYPE_CAN_CONTROL = 2
+TCP_PACKET_TYPE_MODE_CONTROL = 4
+APP_MODE_QUERY_ONLY = 0xFF
+APP_DISPLAY_MODE_BRIDGE = 0
+APP_DISPLAY_MODE_SD_LOGGER = 1
+APP_DISPLAY_MODE_TCP_SERVER = 2
 
 # --- UI TRANSLATIONS ---
 TRANSLATIONS = {
     "PL": {
         "title": "ESP32 CAN-FD Analyzer", 
         "load_dbc": "📂 DBC", "load_log": "Otwórz Log", "channel": "Kanał:", "all_channels": "Wszystkie",
-        "filter_id": "Filtr ID:", "filter_ph": "np. 123", "speed": "Prędkość:",
-        "pause": "Pauza", "resume": "Wznów", "autoscroll": "Auto-scroll", "delta_time": "Delta (Δt)", 
+        "filter_id": "Filtr ID:", "filter_ph": "np. 123", "speed": "Prędkość:", "id_list": "Widoczne ID", "id_filter_enabled": "Filtruj listą ID", "select_all": "Wszystkie", "select_none": "Żadne",
+        "pause": "Pauza", "resume": "Wznów", "autoscroll": "Auto-scroll", "delta_time": "Delta (Δt)", "update_existing_ids": "Aktualizuj ID",
         "clear": "Wyczyść", "export_csv": "💾 CSV", "ip_label": "IP:",
         "headers": ["Lp.", "Czas / Delta", "Magistrala", "CAN ID (Hex)", "DLC", "Dane Payload (Hex)", "Sygnały DBC"],
         "stats_headers": ["CAN ID (Hex)", "Liczba ramek", "Częstotliwość (Hz)", "Ostatni Czas", "Status"],
@@ -87,13 +99,18 @@ TRANSLATIONS = {
         "msg_err": "Błąd", "msg_succ": "Sukces", "msg_net_err": "Błąd Sieci",
         "msg_no_cantools": "Brak biblioteki cantools!", "msg_loaded": "Załadowano: ",
         "msg_bad_interval": "Niepoprawny interwał!", "msg_build_err": "Nie można zbudować ramki: ",
-        "status_ok": "OK", "status_timeout": "TIMEOUT", "export_succ": "Wyeksportowano do: "
+        "status_ok": "OK", "status_timeout": "TIMEOUT", "export_succ": "Wyeksportowano do: ",
+        "tab_can_settings": "Ustawienia CAN",
+        "mode_group": "Wybór trybu pracy (zdalny)", "mode_bridge": "Most CAN", "mode_sd": "Logger SD", "mode_tcp": "Serwer TCP",
+        "btn_set_mode": "Ustaw tryb", "btn_query_mode": "Odpytaj tryb",
+        "mode_remote_on": "Zdalna zmiana trybu: WŁĄCZONA", "mode_remote_off": "Zdalna zmiana trybu: WYŁĄCZONA (ustaw ostatni przełącznik DIP)",
+        "mode_current": "Aktualny tryb: {}", "msg_mode_rejected": "ESP32 odrzucił zmianę trybu (zdalna kontrola wyłączona lub błąd)."
     },
     "EN": {
         "title": "ESP32 CAN-FD Analyzer", 
         "load_dbc": "📂 DBC", "load_log": "Open Log", "channel": "Channel:", "all_channels": "All",
-        "filter_id": "ID Filter:", "filter_ph": "e.g. 123", "speed": "Speed:",
-        "pause": "Pause", "resume": "Resume", "autoscroll": "Auto-scroll", "delta_time": "Delta (Δt)", 
+        "filter_id": "ID Filter:", "filter_ph": "e.g. 123", "speed": "Speed:", "id_list": "Visible IDs", "id_filter_enabled": "Filter by ID list", "select_all": "All", "select_none": "None",
+        "pause": "Pause", "resume": "Resume", "autoscroll": "Auto-scroll", "delta_time": "Delta (Δt)", "update_existing_ids": "Update ID rows",
         "clear": "Clear", "export_csv": "💾 CSV", "ip_label": "IP:",
         "headers": ["No.", "Time / Delta", "Bus", "CAN ID (Hex)", "DLC", "Payload Data (Hex)", "DBC Signals"],
         "stats_headers": ["CAN ID (Hex)", "Count", "Frequency (Hz)", "Last Timestamp", "Status"],
@@ -105,13 +122,18 @@ TRANSLATIONS = {
         "msg_err": "Error", "msg_succ": "Success", "msg_net_err": "Network Error",
         "msg_no_cantools": "Cantools library is missing!", "msg_loaded": "Loaded: ",
         "msg_bad_interval": "Invalid interval!", "msg_build_err": "Cannot build frame: ",
-        "status_ok": "OK", "status_timeout": "TIMEOUT", "export_succ": "Exported to: "
+        "status_ok": "OK", "status_timeout": "TIMEOUT", "export_succ": "Exported to: ",
+        "tab_can_settings": "CAN Settings",
+        "mode_group": "Operating Mode Selection (remote)", "mode_bridge": "CAN Bridge", "mode_sd": "SD Logger", "mode_tcp": "TCP Server",
+        "btn_set_mode": "Set Mode", "btn_query_mode": "Query Mode",
+        "mode_remote_on": "Remote mode control: ENABLED", "mode_remote_off": "Remote mode control: DISABLED (set last DIP switch)",
+        "mode_current": "Current mode: {}", "msg_mode_rejected": "ESP32 rejected the mode change (remote control disabled or error)."
     },
     "DE": {
         "title": "ESP32 CAN-FD Analyzer", 
         "load_dbc": "📂 DBC", "load_log": "Log öffnen", "channel": "Kanal:", "all_channels": "Alle",
-        "filter_id": "ID-Filter:", "filter_ph": "z.B. 123", "speed": "Geschwindigkeit:",
-        "pause": "Pause", "resume": "Fortsetzen", "autoscroll": "Auto-Scroll", "delta_time": "Delta (Δt)", 
+        "filter_id": "ID-Filter:", "filter_ph": "z.B. 123", "speed": "Geschwindigkeit:", "id_list": "Sichtbare IDs", "id_filter_enabled": "Nach ID-Liste filtern", "select_all": "Alle", "select_none": "Keine",
+        "pause": "Pause", "resume": "Fortsetzen", "autoscroll": "Auto-Scroll", "delta_time": "Delta (Δt)", "update_existing_ids": "ID-Zeilen aktualisieren",
         "clear": "Löschen", "export_csv": "💾 CSV", "ip_label": "IP:",
         "headers": ["Nr.", "Zeit / Delta", "Bus", "CAN ID (Hex)", "DLC", "Nutzdaten (Hex)", "DBC Signale"],
         "stats_headers": ["CAN ID (Hex)", "Anzahl", "Frequenz (Hz)", "Letzter Zeitst.", "Status"],
@@ -123,7 +145,12 @@ TRANSLATIONS = {
         "msg_err": "Fehler", "msg_succ": "Erfolg", "msg_net_err": "Netzwerkfehler",
         "msg_no_cantools": "Cantools-Bibliothek fehlt!", "msg_loaded": "Geladen: ",
         "msg_bad_interval": "Ungültiges Intervall!", "msg_build_err": "Frame kann nicht erstellt werden: ",
-        "status_ok": "OK", "status_timeout": "TIMEOUT", "export_succ": "Exportiert nach: "
+        "status_ok": "OK", "status_timeout": "TIMEOUT", "export_succ": "Exportiert nach: ",
+        "tab_can_settings": "CAN Einstellungen",
+        "mode_group": "Betriebsmodus-Auswahl (fernsteuerbar)", "mode_bridge": "CAN-Bridge", "mode_sd": "SD-Logger", "mode_tcp": "TCP-Server",
+        "btn_set_mode": "Modus setzen", "btn_query_mode": "Modus abfragen",
+        "mode_remote_on": "Fernsteuerung des Modus: AKTIV", "mode_remote_off": "Fernsteuerung des Modus: INAKTIV (letzten DIP-Schalter setzen)",
+        "mode_current": "Aktueller Modus: {}", "msg_mode_rejected": "ESP32 hat die Moduswechsel-Anfrage abgelehnt (Fernsteuerung deaktiviert oder Fehler)."
     }
 }
 

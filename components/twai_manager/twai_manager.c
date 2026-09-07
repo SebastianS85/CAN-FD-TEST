@@ -49,6 +49,10 @@ static IRAM_ATTR bool twai_internal_tx_done_cb(twai_node_handle_t handle, const 
 esp_err_t twai_mgr_init_node(twai_mgr_inst_t *inst, const twai_mgr_config_t *cfg) {
     if (!inst || !cfg) return ESP_ERR_INVALID_ARG;
     if (cfg->tx_queue_depth == 0) return ESP_ERR_INVALID_ARG;
+    if (!inst->operation_lock) {
+        inst->operation_lock = xSemaphoreCreateMutex();
+        if (!inst->operation_lock) return ESP_ERR_NO_MEM;
+    }
 
     inst->current_cfg = *cfg;
     inst->bad_state_streak = 0;
@@ -70,7 +74,7 @@ esp_err_t twai_mgr_init_node(twai_mgr_inst_t *inst, const twai_mgr_config_t *cfg
         .data_timing = { .bitrate = (cfg->mode == TWAI_BUS_MODE_FD) ? cfg->data_bitrate : 0 },
         .timestamp_resolution_hz = 1000000, 
         .fail_retry_cnt = 2,
-        .flags = { .enable_self_test = 0, .enable_loopback = 0 },
+        .flags = { .enable_self_test = 0, .enable_loopback = 0, .enable_listen_only = cfg->listen_only },
         .tx_queue_depth = cfg->tx_queue_depth,
     };
 
@@ -132,6 +136,12 @@ esp_err_t twai_mgr_async_transmit(twai_mgr_inst_t *inst, const twai_frame_t *tx_
         tx_frame->buffer_len > sizeof(((twai_mgr_tx_slot_t *)0)->payload)) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (xSemaphoreTake(inst->operation_lock, timeout_ticks) != pdTRUE) return ESP_ERR_TIMEOUT;
+
+    if (!inst->handle || inst->recovery_in_progress) {
+        xSemaphoreGive(inst->operation_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
 
     twai_mgr_tx_slot_t *slots = (twai_mgr_tx_slot_t *)inst->tx_slots;
     twai_mgr_tx_slot_t *slot = NULL;
@@ -147,6 +157,7 @@ esp_err_t twai_mgr_async_transmit(twai_mgr_inst_t *inst, const twai_frame_t *tx_
 
     if (!slot) {
         inst->tx_queue_full_count++;
+        xSemaphoreGive(inst->operation_lock);
         return ESP_ERR_TIMEOUT;
     }
 
@@ -167,51 +178,89 @@ esp_err_t twai_mgr_async_transmit(twai_mgr_inst_t *inst, const twai_frame_t *tx_
     } else if (err != ESP_OK) {
         inst->tx_error_count++;
     }
+    xSemaphoreGive(inst->operation_lock);
     return err;
 }
 
 esp_err_t twai_mgr_reconfigure(twai_mgr_inst_t *inst, const twai_mgr_config_t *new_cfg) {
     if (!inst || !inst->handle) return ESP_ERR_INVALID_STATE;
+    if (xSemaphoreTake(inst->operation_lock, portMAX_DELAY) != pdTRUE) return ESP_ERR_TIMEOUT;
 
     ESP_LOGI(TAG, "Reconfiguring CAN node parameters...");
-    twai_node_disable(inst->handle);
+    twai_mgr_config_t previous_cfg = inst->current_cfg;
+    inst->recovery_in_progress = true;
+    esp_err_t err = twai_node_disable(inst->handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to stop CAN node: %s", esp_err_to_name(err));
+        inst->recovery_in_progress = false;
+        xSemaphoreGive(inst->operation_lock);
+        return err;
+    }
     vTaskDelay(pdMS_TO_TICKS(10));
-    
-    twai_node_delete(inst->handle);
+    err = twai_node_delete(inst->handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to delete stopped CAN node: %s", esp_err_to_name(err));
+        twai_node_enable(inst->handle);
+        inst->recovery_in_progress = false;
+        xSemaphoreGive(inst->operation_lock);
+        return err;
+    }
     inst->handle = NULL;
+    heap_caps_free(inst->tx_slots);
+    inst->tx_slots = NULL;
+    inst->tx_slot_count = 0;
 
-    return twai_mgr_init_node(inst, new_cfg);
+    esp_err_t reconfigure_err = twai_mgr_init_node(inst, new_cfg);
+    if (reconfigure_err != ESP_OK) {
+        ESP_LOGE(TAG, "New CAN configuration failed; restoring previous configuration");
+        esp_err_t restore_err = twai_mgr_init_node(inst, &previous_cfg);
+        if (restore_err != ESP_OK) {
+            ESP_LOGE(TAG, "Unable to restore previous CAN configuration: %s", esp_err_to_name(restore_err));
+        }
+    }
+    inst->recovery_in_progress = false;
+    xSemaphoreGive(inst->operation_lock);
+    return reconfigure_err;
 }
 
 void twai_mgr_health_monitor(twai_mgr_inst_t *inst) {
     if (!inst || !inst->handle) return;
+    if (xSemaphoreTake(inst->operation_lock, 0) != pdTRUE) return;
 
     twai_node_status_t st = {0};
     twai_node_record_t rec = {0};
     
     if (twai_node_get_info(inst->handle, &st, &rec) == ESP_OK) {
-        if (st.state == TWAI_ERROR_PASSIVE || st.state == TWAI_ERROR_BUS_OFF) {
+        if (inst->recovery_in_progress) {
+            if (st.state != TWAI_ERROR_BUS_OFF) {
+                ESP_LOGI(TAG, "CAN node recovered from bus-off");
+                inst->recovery_in_progress = false;
+            }
+        } else if (st.state == TWAI_ERROR_BUS_OFF) {
             inst->bad_state_streak++;
         } else {
             inst->bad_state_streak = 0;
         }
 
-        if (inst->bad_state_streak >= TWAI_BAD_STATE_THRESHOLD) {
-            ESP_LOGW(TAG, "Node BUS_OFF detected! Recovering...");
-            inst->recovery_in_progress = true;
-            twai_node_disable(inst->handle);
-            vTaskDelay(pdMS_TO_TICKS(TWAI_RECOVERY_GUARD_DELAY_MS));
-            twai_node_enable(inst->handle);
-            inst->recover_count++;
+        if (!inst->recovery_in_progress && inst->bad_state_streak >= TWAI_BAD_STATE_THRESHOLD) {
+            esp_err_t err = twai_node_recover(inst->handle);
+            if (err == ESP_OK) {
+                ESP_LOGW(TAG, "CAN node bus-off; recovery started");
+                inst->recovery_in_progress = true;
+                inst->recover_count++;
+            } else {
+                ESP_LOGE(TAG, "Failed to start CAN bus-off recovery: %s", esp_err_to_name(err));
+            }
             inst->bad_state_streak = 0;
-            inst->recovery_in_progress = false;
         }
     }
+    xSemaphoreGive(inst->operation_lock);
 }
 
 esp_err_t twai_mgr_init_custom_node(twai_mgr_inst_t *inst, gpio_num_t tx_io, gpio_num_t rx_io, 
                                    twai_bus_mode_t mode, uint32_t arb_bitrate, uint32_t data_bitrate, 
-                                   uint32_t queue_depth, void *user_ctx, twai_mgr_app_rx_cb_t rx_cb) {
+                                   uint32_t queue_depth, bool listen_only, void *user_ctx,
+                                   twai_mgr_app_rx_cb_t rx_cb) {
     twai_mgr_config_t cfg = {
         .tx_io = tx_io,
         .rx_io = rx_io,
@@ -219,6 +268,7 @@ esp_err_t twai_mgr_init_custom_node(twai_mgr_inst_t *inst, gpio_num_t tx_io, gpi
         .arb_bitrate = arb_bitrate,
         .data_bitrate = data_bitrate,
         .tx_queue_depth = queue_depth,
+        .listen_only = listen_only,
         .user_ctx = user_ctx,
         .app_rx_cb = rx_cb
     };

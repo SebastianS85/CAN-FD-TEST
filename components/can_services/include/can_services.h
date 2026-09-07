@@ -12,12 +12,12 @@ typedef struct {
     uint32_t arbitration_bitrate;
     uint32_t data_bitrate;
     uint32_t tx_queue_depth;
+    bool listen_only;
 } can_services_node_config_t;
 
 typedef struct {
     can_services_node_config_t node1_config;
     can_services_node_config_t node2_config;
-    bool bridge_mode;
     RingbufHandle_t log_ringbuf;
     RingbufHandle_t route_ringbuf;
     twai_mgr_inst_t *route_target;
@@ -36,6 +36,8 @@ esp_err_t can_services_configure(const can_services_config_t *config);
 esp_err_t can_services_init_nodes(void);
 esp_err_t can_services_start(const can_services_config_t *config);
 twai_mgr_inst_t *can_services_get_node(uint8_t node_id);
+esp_err_t can_services_reconfigure_node(uint8_t node_id, uint32_t arbitration_bitrate,
+                                        uint32_t data_bitrate, bool listen_only);
 void can_services_rx_handler(uint8_t node_id, const twai_frame_t *rx_frame, void *user_ctx);
 
 #endif 

@@ -14,6 +14,7 @@ class DataProcessorThread(QThread):
         self.filter_text = ""
         self.selected_bus_idx = 0
         self.is_delta_mode = False
+        self.enabled_ids = None
         self.chart_targets = []
         self.sniffer_target_id = -1
         self.db = None
@@ -26,16 +27,17 @@ class DataProcessorThread(QThread):
         self.id_last_timestamp = {}
         self.id_frequencies = {}
         self.max_esp_timestamp = 0
-        self.last_global_timestamp = 0
+        self.last_arrival_timestamp = {}
         
         self.chart_buffers = [[] for _ in range(4)]
         self.latest_sniffed_data = None
 
-    def update_settings(self, is_paused, filter_text, bus_idx, is_delta, chart_targets, sniffer_id):
+    def update_settings(self, is_paused, filter_text, bus_idx, is_delta, chart_targets, sniffer_id, enabled_ids=None):
         self.is_paused = is_paused
         self.filter_text = filter_text
         self.selected_bus_idx = bus_idx
         self.is_delta_mode = is_delta
+        self.enabled_ids = enabled_ids
         self.chart_targets = chart_targets
         self.sniffer_target_id = sniffer_id
 
@@ -51,7 +53,7 @@ class DataProcessorThread(QThread):
             self.id_last_timestamp.clear()
             self.id_frequencies.clear()
             self.max_esp_timestamp = 0
-            self.last_global_timestamp = 0
+            self.last_arrival_timestamp.clear()
             self.chart_buffers = [[] for _ in range(4)]
             self.latest_sniffed_data = None
 
@@ -103,6 +105,9 @@ class DataProcessorThread(QThread):
                                 self.max_esp_timestamp = timestamp
 
                             clean_id = can_id & 0x1FFFFFFF 
+                            arrival_key = (node_id, clean_id)
+                            previous_timestamp = self.last_arrival_timestamp.get(arrival_key)
+                            self.last_arrival_timestamp[arrival_key] = timestamp
                             
                             if clean_id == self.sniffer_target_id:
                                 self.latest_sniffed_data = raw_data[:actual_len]
@@ -139,13 +144,15 @@ class DataProcessorThread(QThread):
                                 if not matched: continue
 
                             if self.is_delta_mode:
-                                if self.last_global_timestamp == 0: time_val_str = "0 ms"
+                                if previous_timestamp is None: time_val_str = "0 ms"
                                 else:
-                                    delta_ms = timestamp - self.last_global_timestamp
+                                    delta_ms = timestamp - previous_timestamp
                                     time_val_str = f"+{delta_ms} ms" if delta_ms >= 0 else f"{delta_ms} ms"
-                                self.last_global_timestamp = timestamp
                             else:
                                 time_val_str = f"{timestamp} ms"
+
+                            if self.enabled_ids is not None and clean_id not in self.enabled_ids:
+                                continue
 
                             hex_str = " ".join(f"{b:02X}" for b in raw_data)
                             id_str = f"0x{clean_id:03X}" if clean_id <= 0x7FF else f"0x{clean_id:08X} (Ext)"

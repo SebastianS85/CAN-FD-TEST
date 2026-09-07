@@ -6,7 +6,10 @@ class CANTableModel(QAbstractTableModel):
         super().__init__()
         self.headers = headers
         self.frames = []
+        self.all_frames = []
         self.max_frames = 5000
+        self.update_existing_ids = False
+        self.enabled_ids = None
 
     def rowCount(self, parent=QModelIndex()): return len(self.frames)
     def columnCount(self, parent=QModelIndex()): return len(self.headers)
@@ -42,38 +45,63 @@ class CANTableModel(QAbstractTableModel):
         if not new_frames:
             return
 
-        new_frames = list(new_frames)
-        if self.max_frames is not None and len(new_frames) > self.max_frames:
-            new_frames = new_frames[-self.max_frames:]
+        self.all_frames.extend(new_frames)
+        if self.max_frames is not None and len(self.all_frames) > self.max_frames:
+            self.all_frames = self.all_frames[-self.max_frames:]
+        self._rebuild_visible_frames()
 
-        overflow = 0
-        if self.max_frames is not None:
-            overflow = max(0, len(self.frames) + len(new_frames) - self.max_frames)
-        if overflow > 0:
-            self.beginRemoveRows(QModelIndex(), 0, overflow - 1)
-            del self.frames[:overflow]
-            self.endRemoveRows()
+    def _rebuild_visible_frames(self):
+        source_frames = self.all_frames
+        if self.enabled_ids is not None:
+            source_frames = [
+                frame for frame in source_frames
+                if frame.get('clean_id') in self.enabled_ids
+            ]
 
-        self.beginInsertRows(QModelIndex(), len(self.frames), len(self.frames) + len(new_frames) - 1)
-        self.frames.extend(new_frames)
-        self.endInsertRows()
+        if self.update_existing_ids:
+            latest_by_key = {}
+            order = []
+            for frame in source_frames:
+                key = (frame.get('node_id'), frame.get('clean_id'))
+                if key not in latest_by_key:
+                    order.append(key)
+                latest_by_key[key] = frame
+            visible_frames = [latest_by_key[key] for key in order]
+        else:
+            visible_frames = list(source_frames)
+
+        self.beginResetModel()
+        self.frames = visible_frames
+        self.endResetModel()
+
+    def set_enabled_ids(self, enabled_ids):
+        self.enabled_ids = None if enabled_ids is None else set(enabled_ids)
+        self._rebuild_visible_frames()
+
+    def set_update_existing_ids(self, enabled):
+        enabled = bool(enabled)
+        if self.update_existing_ids == enabled:
+            return
+
+        self.update_existing_ids = enabled
+        self._rebuild_visible_frames()
 
     def set_max_frames(self, max_frames):
         self.max_frames = max_frames
-        if max_frames is not None and len(self.frames) > max_frames:
-            overflow = len(self.frames) - max_frames
-            self.beginRemoveRows(QModelIndex(), 0, overflow - 1)
-            del self.frames[:overflow]
-            self.endRemoveRows()
+        if max_frames is not None and len(self.all_frames) > max_frames:
+            self.all_frames = self.all_frames[-max_frames:]
+        self._rebuild_visible_frames()
 
     def update_time_display(self, show_delta):
-        previous_timestamp = None
+        previous_timestamps = {}
         for frame in self.frames:
             timestamp = frame.get('timestamp')
             if timestamp is None:
                 continue
 
+            display_key = (frame.get('node_id'), frame.get('clean_id'))
             if show_delta:
+                previous_timestamp = previous_timestamps.get(display_key)
                 if previous_timestamp is None:
                     frame['time'] = "0 ms"
                 else:
@@ -81,7 +109,7 @@ class CANTableModel(QAbstractTableModel):
                     frame['time'] = f"+{delta_ms} ms" if delta_ms >= 0 else f"{delta_ms} ms"
             else:
                 frame['time'] = f"{timestamp} ms"
-            previous_timestamp = timestamp
+            previous_timestamps[display_key] = timestamp
 
         if self.frames:
             first = self.index(0, 1)
@@ -91,6 +119,7 @@ class CANTableModel(QAbstractTableModel):
     def clear_data(self):
         self.beginResetModel()
         self.frames.clear()
+        self.all_frames.clear()
         self.endResetModel()
 
     def update_headers(self, headers):

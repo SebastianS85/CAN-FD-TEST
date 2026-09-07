@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QCheckBox, QLineEdit, QComboBox, QMessageBox, QTabWidget,
     QFileDialog, QGroupBox, QFormLayout, QScrollArea, QFrame
 )
-from .constants import CANTOOLS_AVAILABLE, CHARTS_AVAILABLE, HEADER_FORMAT, QCheckBox, QColor, QComboBox, QFileDialog, QFont, QFormLayout, QFrame, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPainter, QPointF, QPushButton, QRegularExpression, QRegularExpressionValidator, QScrollArea, QTabWidget, QTableView, QTableWidget, QTableWidgetItem, QTimer, QVBoxLayout, QWidget, Qt, TCP_IP, TCP_PORT, TRANSLATIONS, csv, deque, len_to_dlc, logging, os, save_config, struct
+from .constants import APP_DISPLAY_MODE_BRIDGE, APP_DISPLAY_MODE_SD_LOGGER, APP_DISPLAY_MODE_TCP_SERVER, CAN_CONFIG_MAGIC, CAN_CONTROL_FORMAT, CANTOOLS_AVAILABLE, CHARTS_AVAILABLE, FRAME_SIZE, HEADER_FORMAT, TCP_PACKET_HEADER_FORMAT, TCP_PACKET_TYPE_CAN_CONTROL, TCP_PACKET_TYPE_CAN_FRAME, TCP_PACKET_TYPE_MODE_CONTROL, QCheckBox, QColor, QComboBox, QFileDialog, QFont, QFormLayout, QFrame, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPainter, QPointF, QPushButton, QRegularExpression, QRegularExpressionValidator, QScrollArea, QTabWidget, QTableView, QTableWidget, QTableWidgetItem, QTimer, QVBoxLayout, QWidget, Qt, TCP_IP, TCP_PORT, TRANSLATIONS, csv, deque, len_to_dlc, logging, os, save_config, struct
 
 if CANTOOLS_AVAILABLE:
     from .constants import cantools
@@ -35,9 +35,12 @@ class CANViewerFullWindow(QMainWindow):
         self.log_loader_thread = None
         self.db = None
         self.dbc_filename = "-"
+        self.id_filter_checkboxes = {}
 
         self.chart_points = [deque() for _ in range(4)]
         self.chart_start_t = None
+        self._mode_remote_enabled = False
+        self._current_mode = None
 
         self.setup_ui()
 
@@ -55,6 +58,8 @@ class CANViewerFullWindow(QMainWindow):
         self.filter_input.textChanged.connect(self.send_settings_to_thread)
         self.bus_filter_combo.currentIndexChanged.connect(self.send_settings_to_thread)
         self.delta_cb.stateChanged.connect(self.update_delta_display)
+        self.update_existing_ids_cb.stateChanged.connect(self.update_existing_ids)
+        self.id_filter_enabled_cb.stateChanged.connect(self.send_settings_to_thread)
         self.sniffer_id_input.textChanged.connect(self.send_settings_to_thread)
 
         self.speed_timer = QTimer()
@@ -82,6 +87,8 @@ class CANViewerFullWindow(QMainWindow):
         self.filter_input.setText(str(self.settings["filter_text"]))
         self.bus_filter_combo.setCurrentIndex(int(self.settings["bus_filter_index"]))
         self.delta_cb.setChecked(bool(self.settings["delta_enabled"]))
+        self.id_filter_enabled_cb.setChecked(bool(self.settings.get("id_filter_enabled", False)))
+        self.update_existing_ids_cb.setChecked(bool(self.settings.get("update_existing_ids", False)))
         self.autoscroll_cb.setChecked(bool(self.settings["autoscroll_enabled"]))
         self.tabs.setCurrentIndex(int(self.settings["active_tab_index"]))
 
@@ -95,6 +102,8 @@ class CANViewerFullWindow(QMainWindow):
             "filter_text": self.filter_input.text(),
             "bus_filter_index": self.bus_filter_combo.currentIndex(),
             "delta_enabled": self.delta_cb.isChecked(),
+            "id_filter_enabled": self.id_filter_enabled_cb.isChecked(),
+            "update_existing_ids": self.update_existing_ids_cb.isChecked(),
             "autoscroll_enabled": self.autoscroll_cb.isChecked(),
             "active_tab_index": self.tabs.currentIndex(),
             "window_geometry": bytes(self.saveGeometry().toBase64()).decode("ascii"),
@@ -146,6 +155,7 @@ class CANViewerFullWindow(QMainWindow):
         self.filter_label = QLabel()
         self.filter_input = QLineEdit()
         self.filter_input.setMaximumWidth(80)
+        self.id_filter_enabled_cb = QCheckBox()
         
         self.speed_label = QLabel()
         self.speed_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
@@ -157,6 +167,7 @@ class CANViewerFullWindow(QMainWindow):
         self.pause_btn.clicked.connect(self.toggle_pause)
         
         self.delta_cb = QCheckBox()
+        self.update_existing_ids_cb = QCheckBox()
         self.autoscroll_cb = QCheckBox()
         self.autoscroll_cb.setChecked(True)
         
@@ -182,6 +193,7 @@ class CANViewerFullWindow(QMainWindow):
         top_layout.addWidget(self.speed_label)
         top_layout.addWidget(self.pause_btn)
         top_layout.addWidget(self.delta_cb)
+        top_layout.addWidget(self.update_existing_ids_cb)
         top_layout.addWidget(self.autoscroll_cb)
         top_layout.addWidget(self.export_btn)
         top_layout.addWidget(self.clear_btn)
@@ -206,7 +218,31 @@ class CANViewerFullWindow(QMainWindow):
         self.table.setColumnWidth(4, 40)
         self.table.setColumnWidth(5, 200)
         self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
-        monitor_layout.addWidget(self.table)
+        monitor_content = QHBoxLayout()
+        monitor_content.addWidget(self.table, 1)
+
+        self.id_filter_group = QGroupBox()
+        self.id_filter_group.setFixedWidth(190)
+        id_filter_layout = QVBoxLayout(self.id_filter_group)
+        id_filter_buttons = QHBoxLayout()
+        self.select_all_ids_btn = QPushButton()
+        self.select_none_ids_btn = QPushButton()
+        self.select_all_ids_btn.clicked.connect(lambda: self.set_all_id_filters(True))
+        self.select_none_ids_btn.clicked.connect(lambda: self.set_all_id_filters(False))
+        id_filter_buttons.addWidget(self.select_all_ids_btn)
+        id_filter_buttons.addWidget(self.select_none_ids_btn)
+        id_filter_layout.addLayout(id_filter_buttons)
+        id_filter_layout.addWidget(self.id_filter_enabled_cb)
+
+        self.id_filter_scroll = QScrollArea()
+        self.id_filter_scroll.setWidgetResizable(True)
+        self.id_filter_widget = QWidget()
+        self.id_filter_list_layout = QVBoxLayout(self.id_filter_widget)
+        self.id_filter_list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.id_filter_scroll.setWidget(self.id_filter_widget)
+        id_filter_layout.addWidget(self.id_filter_scroll)
+        monitor_content.addWidget(self.id_filter_group)
+        monitor_layout.addLayout(monitor_content)
         self.tabs.addTab(monitor_tab, "")
 
         plot_tab = QWidget()
@@ -371,7 +407,37 @@ class CANViewerFullWindow(QMainWindow):
         gen_layout.addStretch()
         self.tabs.addTab(gen_tab, "")
 
+        can_settings_tab = QWidget()
+        can_settings_layout = QVBoxLayout(can_settings_tab)
+        self.can1_settings_group = QGroupBox()
+        self.can2_settings_group = QGroupBox()
+        self.can1_arb_bitrate_combo, self.can1_data_bitrate_combo = self.add_can_settings_controls(
+            can_settings_layout, self.can1_settings_group, 500000, 0, 1)
+        self.can2_arb_bitrate_combo, self.can2_data_bitrate_combo = self.add_can_settings_controls(
+            can_settings_layout, self.can2_settings_group, 1000000, 2000000, 2)
+
+        self.mode_group = QGroupBox()
+        mode_layout = QVBoxLayout(self.mode_group)
+        self.mode_remote_status_label = QLabel()
+        self.mode_current_label = QLabel()
+        mode_layout.addWidget(self.mode_remote_status_label)
+        mode_layout.addWidget(self.mode_current_label)
+        mode_ctrl_layout = QHBoxLayout()
+        self.mode_combo = QComboBox()
+        mode_ctrl_layout.addWidget(self.mode_combo)
+        self.set_mode_btn = QPushButton()
+        self.set_mode_btn.clicked.connect(self.set_remote_mode)
+        mode_ctrl_layout.addWidget(self.set_mode_btn)
+        mode_layout.addLayout(mode_ctrl_layout)
+        can_settings_layout.addWidget(self.mode_group)
+        for mode_value in (APP_DISPLAY_MODE_BRIDGE, APP_DISPLAY_MODE_SD_LOGGER, APP_DISPLAY_MODE_TCP_SERVER):
+            self.mode_combo.addItem("", mode_value)
+
+        can_settings_layout.addStretch()
+        self.tabs.addTab(can_settings_tab, "")
+
         sniffer_tab = QWidget()
+        self.sniffer_tab = sniffer_tab
         sniffer_layout = QVBoxLayout(sniffer_tab)
         sniffer_ctrl = QHBoxLayout()
         self.sniffer_id_label = QLabel()
@@ -391,6 +457,37 @@ class CANViewerFullWindow(QMainWindow):
 
         self.stats_label = QLabel()
         main_layout.addWidget(self.stats_label)
+
+    def add_can_settings_controls(self, parent_layout, group, arbitration_bitrate, data_bitrate, node_id):
+        form_layout = QFormLayout(group)
+        arbitration_combo = QComboBox()
+        data_combo = QComboBox()
+        for label, value in [("125 kbit/s", 125000), ("250 kbit/s", 250000),
+                             ("500 kbit/s", 500000), ("800 kbit/s", 800000),
+                             ("1 Mbit/s", 1000000)]:
+            arbitration_combo.addItem(label, value)
+        for label, value in [("Classic CAN", 0), ("1 Mbit/s", 1000000),
+                             ("2 Mbit/s", 2000000), ("4 Mbit/s", 4000000),
+                             ("5 Mbit/s", 5000000)]:
+            data_combo.addItem(label, value)
+        arbitration_combo.setCurrentIndex(arbitration_combo.findData(arbitration_bitrate))
+        data_combo.setCurrentIndex(data_combo.findData(data_bitrate))
+        listen_only_cb = QCheckBox()
+        apply_button = QPushButton()
+        apply_button.clicked.connect(lambda: self.send_can_settings(node_id, arbitration_combo, data_combo, listen_only_cb))
+        form_layout.addRow("Arbitration bitrate:", arbitration_combo)
+        form_layout.addRow("Data bitrate:", data_combo)
+        form_layout.addRow("Listen only:", listen_only_cb)
+        form_layout.addRow("", apply_button)
+        if node_id == 1:
+            self.can1_apply_settings_btn = apply_button
+            self.can1_listen_only_cb = listen_only_cb
+        else:
+            self.can2_apply_settings_btn = apply_button
+            self.can2_listen_only_cb = listen_only_cb
+        parent_layout.addWidget(group)
+        return arbitration_combo, data_combo
+
 
     def save_and_reconnect_ip(self):
         new_ip = self.ip_input.text().strip()
@@ -432,7 +529,37 @@ class CANViewerFullWindow(QMainWindow):
         except ValueError:
             pass
 
-        self.processor_thread.update_settings(is_paused, filter_text, bus_idx, is_delta, chart_targets, sniffer_id)
+        enabled_ids = self.get_enabled_ids() if self.id_filter_enabled_cb.isChecked() else None
+        self.table_model.set_enabled_ids(enabled_ids)
+        self.processor_thread.update_settings(is_paused, filter_text, bus_idx, is_delta, chart_targets, sniffer_id, enabled_ids)
+
+    def get_enabled_ids(self):
+        if not self.id_filter_checkboxes:
+            return None
+        return {
+            can_id for can_id, checkbox in self.id_filter_checkboxes.items()
+            if checkbox.isChecked()
+        }
+
+    def update_id_filter_panel(self):
+        with self.processor_thread.stats_lock:
+            discovered_ids = sorted(self.processor_thread.id_statistics)
+
+        for can_id in discovered_ids:
+            if can_id in self.id_filter_checkboxes:
+                continue
+            checkbox = QCheckBox(f"0x{can_id:03X}")
+            checkbox.setChecked(True)
+            checkbox.stateChanged.connect(self.send_settings_to_thread)
+            self.id_filter_checkboxes[can_id] = checkbox
+            self.id_filter_list_layout.addWidget(checkbox)
+        if discovered_ids:
+            self.send_settings_to_thread()
+
+    def set_all_id_filters(self, enabled):
+        for checkbox in self.id_filter_checkboxes.values():
+            checkbox.setChecked(enabled)
+        self.send_settings_to_thread()
 
     def on_frames_ready(self, processed_frames):
         self.table_model.add_frames(processed_frames)
@@ -445,6 +572,9 @@ class CANViewerFullWindow(QMainWindow):
     def update_delta_display(self, _state=None):
         self.send_settings_to_thread()
         self.table_model.update_time_display(self.delta_cb.isChecked())
+
+    def update_existing_ids(self, _state=None):
+        self.table_model.set_update_existing_ids(self.update_existing_ids_cb.isChecked())
 
     def export_csv(self):
         if not self.table_model.frames: return
@@ -461,6 +591,7 @@ class CANViewerFullWindow(QMainWindow):
                 QMessageBox.critical(self, self.get_t("msg_err"), str(e))
 
     def update_periodic_timers(self):
+        self.update_id_filter_panel()
         f_sec, b_sec = self.processor_thread.get_and_reset_speed()
         self.speed_label.setText(f"{self.get_t('speed')} {f_sec} r/s | {b_sec / 1024:.1f} kB/s")
 
@@ -540,7 +671,7 @@ class CANViewerFullWindow(QMainWindow):
                             if self.chart_start_t is None:
                                 self.chart_start_t = t_sec
             
-        if self.tabs.currentIndex() == 4 and self.processor_thread.latest_sniffed_data:
+        if self.tabs.currentWidget() is self.sniffer_tab and self.processor_thread.latest_sniffed_data:
             self.bit_grid.update_data(self.processor_thread.latest_sniffed_data)
 
     def load_dbc_file(self):
@@ -595,6 +726,9 @@ class CANViewerFullWindow(QMainWindow):
         self.table_model.clear_data()
         self.incoming_buffer.clear()
         self.processor_thread.clear_stats()
+        for checkbox in self.id_filter_checkboxes.values():
+            checkbox.deleteLater()
+        self.id_filter_checkboxes.clear()
         self.chart_start_t = None
         if CHARTS_AVAILABLE: 
             for i in range(4):
@@ -634,7 +768,12 @@ class CANViewerFullWindow(QMainWindow):
         
         self.filter_label.setText(t["filter_id"])
         self.filter_input.setPlaceholderText(t["filter_ph"])
+        self.id_filter_group.setTitle(t["id_list"])
+        self.select_all_ids_btn.setText(t["select_all"])
+        self.select_none_ids_btn.setText(t["select_none"])
+        self.id_filter_enabled_cb.setText(t["id_filter_enabled"])
         self.delta_cb.setText(t["delta_time"])
+        self.update_existing_ids_cb.setText(t["update_existing_ids"])
         self.autoscroll_cb.setText(t["autoscroll"])
         self.pause_btn.setText(t["resume"] if self.pause_btn.isChecked() else t["pause"])
         self.clear_btn.setText(t["clear"])
@@ -646,8 +785,26 @@ class CANViewerFullWindow(QMainWindow):
         self.tabs.setTabText(1, t["tab_plots"])
         self.tabs.setTabText(2, t["tab_stats"])
         self.tabs.setTabText(3, t["tab_gen"])
-        self.tabs.setTabText(4, t["tab_sniffer"])
+        self.tabs.setTabText(4, t["tab_can_settings"])
+        self.tabs.setTabText(5, t["tab_sniffer"])
+        self.mode_group.setTitle(t["mode_group"])
+        self.set_mode_btn.setText(t["btn_set_mode"])
+        mode_labels = {APP_DISPLAY_MODE_BRIDGE: t["mode_bridge"], APP_DISPLAY_MODE_SD_LOGGER: t["mode_sd"],
+                       APP_DISPLAY_MODE_TCP_SERVER: t["mode_tcp"]}
+        for i in range(self.mode_combo.count()):
+            self.mode_combo.setItemText(i, mode_labels[self.mode_combo.itemData(i)])
+        self.mode_remote_status_label.setText(
+            t["mode_remote_on"] if getattr(self, "_mode_remote_enabled", False) else t["mode_remote_off"]
+        )
+        current_mode = getattr(self, "_current_mode", None)
+        self.mode_current_label.setText(
+            t["mode_current"].format(mode_labels.get(current_mode, "-"))
+        )
         self.form_group.setTitle(t["tab_gen"])
+        self.can1_settings_group.setTitle("CAN 1")
+        self.can2_settings_group.setTitle("CAN 2")
+        self.can1_apply_settings_btn.setText("Apply CAN 1")
+        self.can2_apply_settings_btn.setText("Apply CAN 2")
         
         self.lbl_bus.setText(t["form_bus"])
         self.lbl_id.setText(t["form_id"])
@@ -678,7 +835,8 @@ class CANViewerFullWindow(QMainWindow):
         num_bytes = len(data_bytes)
         if num_bytes > 64: data_bytes = data_bytes[:64]; num_bytes = 64
         dlc_code, _ = len_to_dlc(num_bytes)
-        return struct.pack(HEADER_FORMAT, 0, target_bus, can_id, dlc_code) + data_bytes.ljust(64, b'\x00')
+        frame = struct.pack(HEADER_FORMAT, 0, target_bus, can_id, dlc_code) + data_bytes.ljust(64, b'\x00')
+        return struct.pack(TCP_PACKET_HEADER_FORMAT, TCP_PACKET_TYPE_CAN_FRAME, FRAME_SIZE) + frame
 
     def send_can_frame_tcp(self, is_cyclic=False):
         try:
@@ -688,6 +846,39 @@ class CANViewerFullWindow(QMainWindow):
                 QMessageBox.critical(self, self.get_t("msg_net_err"), "No TCP connection with ESP32!")
         except Exception as e:
             if not is_cyclic: QMessageBox.critical(self, self.get_t("msg_err"), f"{self.get_t('msg_build_err')}{e}")
+
+    def send_can_settings(self, node_id, arbitration_combo, data_combo, listen_only_cb):
+        if self.cyclic_sender_thread:
+            self.stop_cyclic_transmission()
+        arbitration_bitrate = arbitration_combo.currentData()
+        data_bitrate = data_combo.currentData()
+        command = struct.pack(CAN_CONTROL_FORMAT, CAN_CONFIG_MAGIC, node_id,
+                      arbitration_bitrate, data_bitrate, 1 if listen_only_cb.isChecked() else 0)
+        payload = struct.pack(TCP_PACKET_HEADER_FORMAT, TCP_PACKET_TYPE_CAN_CONTROL, len(command)) + command
+        if not self.tcp_thread.send_tcp_control_command(payload):
+            QMessageBox.critical(
+                self,
+                self.get_t("msg_net_err"),
+                "ESP32 did not confirm the CAN configuration. Rebuild and flash the latest firmware."
+            )
+
+    def apply_mode_response(self, result):
+        if result is None:
+            QMessageBox.critical(self, self.get_t("msg_net_err"), "No TCP connection with ESP32!")
+            return None
+        ack_ok, mode, remote_enabled = result
+        self._mode_remote_enabled = remote_enabled
+        self._current_mode = mode
+        self.retranslate_ui()
+        if not ack_ok:
+            QMessageBox.critical(self, self.get_t("msg_net_err"), self.get_t("msg_mode_rejected"))
+        return result
+
+    def set_remote_mode(self):
+        requested_mode = self.mode_combo.currentData()
+        command = struct.pack("<B", requested_mode)
+        payload = struct.pack(TCP_PACKET_HEADER_FORMAT, TCP_PACKET_TYPE_MODE_CONTROL, len(command)) + command
+        self.apply_mode_response(self.tcp_thread.send_tcp_mode_command(payload))
 
     def start_cyclic_transmission(self):
         try:

@@ -5,12 +5,7 @@
 #include <stdbool.h>
 #include "twai_manager.h"
 #include "pcf8574.h"
-
-typedef enum {
-    APP_DISPLAY_MODE_BRIDGE = 0,
-    APP_DISPLAY_MODE_SD_LOGGER,
-    APP_DISPLAY_MODE_TCP_SERVER,
-} app_display_mode_t;
+#include "app_types.h"
 
 typedef struct {
     volatile uint32_t rx_frames;
@@ -29,7 +24,6 @@ typedef struct {
 typedef struct {
     bool oled_enabled;
     pcf8574_t *pcf8574;
-    app_display_mode_t display_mode;
     volatile app_stats_ui_metrics_t *metrics;
 } app_stats_ui_config_t;
 

@@ -2,7 +2,9 @@
 #include "can_logger.h"
 #include "wifi_manager.h"
 #include "app_stats_ui.h"
+#include "app_mode_state.h"
 #include "esp_log.h"
+#include "nvs.h"
 #include "freertos/task.h"
 #include <string.h>
 
@@ -10,6 +12,66 @@ static const char *TAG = "can_services";
 static can_services_config_t s_cfg = {0};
 static twai_mgr_inst_t s_node1 = {0};
 static twai_mgr_inst_t s_node2 = {0};
+
+static bool can_services_bitrate_is_valid(uint32_t bitrate)
+{
+    switch (bitrate) {
+        case 125000:
+        case 250000:
+        case 500000:
+        case 800000:
+        case 1000000:
+        case 2000000:
+        case 4000000:
+        case 5000000:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static void can_services_load_saved_bitrates(void)
+{
+    nvs_handle_t handle;
+    if (nvs_open("can_settings", NVS_READWRITE, &handle) != ESP_OK) return;
+
+    uint32_t bitrate;
+    if (nvs_get_u32(handle, "can1_arb", &bitrate) == ESP_OK && can_services_bitrate_is_valid(bitrate)) {
+        s_cfg.node1_config.arbitration_bitrate = bitrate;
+    }
+    if (nvs_get_u32(handle, "can1_data", &bitrate) == ESP_OK &&
+        (bitrate == 0 || can_services_bitrate_is_valid(bitrate))) {
+        s_cfg.node1_config.data_bitrate = bitrate;
+    }
+    if (nvs_get_u32(handle, "can2_arb", &bitrate) == ESP_OK && can_services_bitrate_is_valid(bitrate)) {
+        s_cfg.node2_config.arbitration_bitrate = bitrate;
+    }
+    if (nvs_get_u32(handle, "can2_data", &bitrate) == ESP_OK &&
+        (bitrate == 0 || can_services_bitrate_is_valid(bitrate))) {
+        s_cfg.node2_config.data_bitrate = bitrate;
+    }
+    s_cfg.node1_config.mode = s_cfg.node1_config.data_bitrate == 0 ?
+                              TWAI_BUS_MODE_CLASSIC : TWAI_BUS_MODE_FD;
+    s_cfg.node2_config.mode = s_cfg.node2_config.data_bitrate == 0 ?
+                              TWAI_BUS_MODE_CLASSIC : TWAI_BUS_MODE_FD;
+    nvs_close(handle);
+}
+
+static esp_err_t can_services_save_bitrates(uint8_t node_id, uint32_t arbitration_bitrate,
+                                            uint32_t data_bitrate)
+{
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open("can_settings", NVS_READWRITE, &handle);
+    if (err != ESP_OK) return err;
+
+    const char *arb_key = node_id == 1 ? "can1_arb" : "can2_arb";
+    const char *data_key = node_id == 1 ? "can1_data" : "can2_data";
+    err = nvs_set_u32(handle, arb_key, arbitration_bitrate);
+    if (err == ESP_OK) err = nvs_set_u32(handle, data_key, data_bitrate);
+    if (err == ESP_OK) err = nvs_commit(handle);
+    nvs_close(handle);
+    return err;
+}
 
 void can_services_rx_handler(uint8_t node_id, const twai_frame_t *rx_frame, void *user_ctx) {
     (void)user_ctx;
@@ -33,12 +95,13 @@ void can_services_rx_handler(uint8_t node_id, const twai_frame_t *rx_frame, void
     }
 
     BaseType_t awoken = pdFALSE;
-    if (s_cfg.bridge_mode) {
+    app_display_mode_t mode = app_mode_state_get_mode();
+    if (mode == APP_DISPLAY_MODE_BRIDGE) {
         if (node_id == 1 && s_cfg.route_ringbuf &&
             xRingbufferSendFromISR(s_cfg.route_ringbuf, &frame, sizeof(frame), &awoken) != pdTRUE) {
             if (s_cfg.route_drop_count) (*s_cfg.route_drop_count)++;
         }
-    } else if (s_cfg.log_ringbuf) {
+    } else if ((mode == APP_DISPLAY_MODE_SD_LOGGER || mode == APP_DISPLAY_MODE_TCP_SERVER) && s_cfg.log_ringbuf) {
         if (xRingbufferSendFromISR(s_cfg.log_ringbuf, &frame, sizeof(frame), &awoken) != pdTRUE) {
             if (s_cfg.log_drop_count) (*s_cfg.log_drop_count)++;
         } else if (s_cfg.log_ringbuf_in_count) {
@@ -190,7 +253,10 @@ static void osci_tx_task(void *pvParameters) {
 esp_err_t can_services_configure(const can_services_config_t *config) {
     if (!config) return ESP_ERR_INVALID_ARG;
     s_cfg = *config;
-    s_cfg.route_target = s_cfg.bridge_mode ? &s_node2 : NULL;
+    can_services_load_saved_bitrates();
+    /* Routing capability follows whether a route ring buffer was wired up, not a
+     * fixed boot mode, so remote mode can enable bridging at runtime. */
+    s_cfg.route_target = s_cfg.route_ringbuf ? &s_node2 : NULL;
     return ESP_OK;
 }
 
@@ -203,6 +269,7 @@ esp_err_t can_services_init_nodes(void) {
         s_cfg.node1_config.arbitration_bitrate,
         s_cfg.node1_config.data_bitrate,
         s_cfg.node1_config.tx_queue_depth,
+        s_cfg.node1_config.listen_only,
         (void *)1,
         can_services_rx_handler);
     if (err != ESP_OK) {
@@ -218,6 +285,7 @@ esp_err_t can_services_init_nodes(void) {
         s_cfg.node2_config.arbitration_bitrate,
         s_cfg.node2_config.data_bitrate,
         s_cfg.node2_config.tx_queue_depth,
+        s_cfg.node2_config.listen_only,
         (void *)2,
         can_services_rx_handler);
 }
@@ -226,6 +294,40 @@ twai_mgr_inst_t *can_services_get_node(uint8_t node_id) {
     if (node_id == 1) return &s_node1;
     if (node_id == 2) return &s_node2;
     return NULL;
+}
+
+esp_err_t can_services_reconfigure_node(uint8_t node_id, uint32_t arbitration_bitrate,
+                                        uint32_t data_bitrate, bool listen_only)
+{
+    if ((node_id != 1 && node_id != 2) || !can_services_bitrate_is_valid(arbitration_bitrate) ||
+        (data_bitrate != 0 && !can_services_bitrate_is_valid(data_bitrate))) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    can_services_node_config_t *node_cfg = node_id == 1 ? &s_cfg.node1_config : &s_cfg.node2_config;
+    twai_mgr_inst_t *node = node_id == 1 ? &s_node1 : &s_node2;
+    twai_mgr_config_t new_cfg = node->current_cfg;
+    new_cfg.arb_bitrate = arbitration_bitrate;
+    new_cfg.data_bitrate = data_bitrate;
+    new_cfg.mode = data_bitrate == 0 ? TWAI_BUS_MODE_CLASSIC : TWAI_BUS_MODE_FD;
+    new_cfg.listen_only = listen_only;
+
+    ESP_LOGI(TAG, "Stopping CAN %u before bitrate update", node_id);
+    esp_err_t err = twai_mgr_reconfigure(node, &new_cfg);
+    if (err != ESP_OK) return err;
+
+    node_cfg->arbitration_bitrate = arbitration_bitrate;
+    node_cfg->data_bitrate = data_bitrate;
+    node_cfg->mode = new_cfg.mode;
+    node_cfg->listen_only = listen_only;
+    err = can_services_save_bitrates(node_id, arbitration_bitrate, data_bitrate);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "CAN %u updated but could not be saved: %s", node_id, esp_err_to_name(err));
+    } else {
+        ESP_LOGI(TAG, "CAN %u restarted at %lu/%lu bit/s", node_id,
+                 (unsigned long)arbitration_bitrate, (unsigned long)data_bitrate);
+    }
+    return err;
 }
 
 esp_err_t can_services_start(const can_services_config_t *config) {

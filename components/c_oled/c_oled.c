@@ -54,14 +54,17 @@ esp_err_t c_oled_init(i2c_master_bus_handle_t i2c_bus) {
 
     esp_lcd_panel_reset(s_panel_handle);
     esp_lcd_panel_init(s_panel_handle);
-    
-    
-    esp_lcd_panel_mirror(s_panel_handle, true, true);
+    c_oled_set_rotation_180(true);
     
     esp_lcd_panel_disp_on_off(s_panel_handle, true);
     
     ESP_LOGI(TAG, "Ready!");
     return ESP_OK;
+}
+
+esp_err_t c_oled_set_rotation_180(bool enabled) {
+    if (s_panel_handle == NULL) return ESP_ERR_INVALID_STATE;
+    return esp_lcd_panel_mirror(s_panel_handle, enabled, enabled);
 }
 
 void c_oled_clear_buffer(void) {

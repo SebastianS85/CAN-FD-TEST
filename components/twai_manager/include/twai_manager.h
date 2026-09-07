@@ -6,6 +6,7 @@
 #include "esp_twai.h"
 #include "esp_twai_onchip.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 typedef enum {
     TWAI_BUS_MODE_CLASSIC,
@@ -21,6 +22,7 @@ typedef struct {
     uint32_t arb_bitrate;
     uint32_t data_bitrate;
     uint32_t tx_queue_depth;
+    bool listen_only;
     void *user_ctx;
     twai_mgr_app_rx_cb_t app_rx_cb;
 } twai_mgr_config_t;
@@ -35,13 +37,15 @@ typedef struct {
     void *tx_slots;
     uint16_t tx_slot_count;
     portMUX_TYPE tx_slot_lock;
+    SemaphoreHandle_t operation_lock;
     volatile bool recovery_in_progress;
 } twai_mgr_inst_t;
 
 
 esp_err_t twai_mgr_init_custom_node(twai_mgr_inst_t *inst, gpio_num_t tx_io, gpio_num_t rx_io, 
                                      twai_bus_mode_t mode, uint32_t arb_bitrate, uint32_t data_bitrate, 
-                                     uint32_t queue_depth, void *user_ctx, twai_mgr_app_rx_cb_t rx_cb);
+                                     uint32_t queue_depth, bool listen_only, void *user_ctx,
+                                     twai_mgr_app_rx_cb_t rx_cb);
 
 
 esp_err_t twai_mgr_init_fd_node(twai_mgr_inst_t *inst, gpio_num_t tx_io, gpio_num_t rx_io, uint32_t queue_depth, void *user_ctx, twai_mgr_app_rx_cb_t rx_cb);

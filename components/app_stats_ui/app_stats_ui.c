@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include "app_stats_ui.h"
+#include "app_mode_state.h"
 #include "c_oled.h"
 #include "wifi_manager.h"
 #include "can_logger.h"
@@ -27,7 +28,7 @@ static void diagnostics_task(void *pvParameters) {
             uint32_t backlog = s_cfg.metrics->ringbuf_in - s_cfg.metrics->ringbuf_out;
 
             printf("[SYSTEM] Mode: %lu | RX: %lu | GW Drops: %lu | Backlog: %lu\n",
-                   (unsigned long)s_cfg.display_mode,
+                   (unsigned long)app_mode_state_get_mode(),
                    (unsigned long)s_cfg.metrics->rx_frames,
                    (unsigned long)s_cfg.metrics->gateway_drops,
                    (unsigned long)backlog);
@@ -46,17 +47,22 @@ static void oled_display_task(void *arg) {
     char text_buf[48];
 
     while (1) {
+        app_display_mode_t mode = app_mode_state_get_mode();
         uint8_t port_val = 0;
         if (pcf8574_read_byte(s_cfg.pcf8574, &port_val) == ESP_OK) {
             port_val |= 0x0F;
             port_val |= 0xF0;
 
-            if (s_cfg.display_mode == APP_DISPLAY_MODE_BRIDGE) {
+            if (mode == APP_DISPLAY_MODE_BRIDGE) {
                 port_val &= ~(1 << 4);
-            } else if (s_cfg.display_mode == APP_DISPLAY_MODE_SD_LOGGER) {
+            } else if (mode == APP_DISPLAY_MODE_SD_LOGGER) {
                 port_val &= ~(1 << 5);
-            } else if (s_cfg.display_mode == APP_DISPLAY_MODE_TCP_SERVER) {
+            } else if (mode == APP_DISPLAY_MODE_TCP_SERVER) {
                 port_val &= ~(1 << 6);
+            }
+            /* Last free LED: lit whenever remote (Python-controlled) mode selection is active. */
+            if (app_mode_state_is_remote()) {
+                port_val &= ~(1 << 7);
             }
 
             pcf8574_write_byte(s_cfg.pcf8574, port_val);
@@ -69,12 +75,14 @@ static void oled_display_task(void *arg) {
             c_oled_draw_string(0, 2, "Safe to remove!");
             c_oled_draw_string(0, 4, "You can power off");
         } else {
-            if (s_cfg.display_mode == APP_DISPLAY_MODE_BRIDGE) {
+            if (mode == APP_DISPLAY_MODE_BRIDGE) {
                 c_oled_draw_string(0, 0, "CAN Bridge Mode");
-            } else if (s_cfg.display_mode == APP_DISPLAY_MODE_SD_LOGGER) {
+            } else if (mode == APP_DISPLAY_MODE_SD_LOGGER) {
                 c_oled_draw_string(0, 0, "SD Logger Mode");
-            } else {
+            } else if (mode == APP_DISPLAY_MODE_TCP_SERVER) {
                 c_oled_draw_string(0, 0, "TCP Server Mode");
+            } else {
+                c_oled_draw_string(0, 0, "TCP Config Mode");
             }
 
             snprintf(text_buf, sizeof(text_buf), "C1 T:%lu R:%lu",
@@ -87,7 +95,10 @@ static void oled_display_task(void *arg) {
                      (unsigned long)s_cfg.metrics->rx_frames_node2);
             c_oled_draw_string(0, 4, text_buf);
 
-            if (s_cfg.display_mode == APP_DISPLAY_MODE_TCP_SERVER && wifi_manager_is_connected()) {
+            if (mode == APP_DISPLAY_MODE_SD_LOGGER && !can_logger_is_sd_card_mounted()) {
+                snprintf(text_buf, sizeof(text_buf), "SD: NO CARD");
+            } else if ((mode == APP_DISPLAY_MODE_TCP_SERVER || mode == APP_DISPLAY_MODE_NONE) &&
+                       wifi_manager_is_connected()) {
                 snprintf(text_buf, sizeof(text_buf), "%s", wifi_manager_get_ip());
             } else {
                 snprintf(text_buf, sizeof(text_buf), "GW Drops: %lu",
