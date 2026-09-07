@@ -32,9 +32,9 @@ converter_config.json
 config.ini
 
 # MCP scripts
-./mcp_esp_bridge.py
-./mcp_esp.py
-.continue
+mcp_esp_bridge.py
+mcp_esp.py
+.continue/
 
 
 
