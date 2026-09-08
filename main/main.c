@@ -18,9 +18,9 @@ static const app_setup_can_config_t can_config = {
         .listen_only =false,
     },
     .node2 = {
-        .arbitration_bitrate = 1000000,
-        .data_bitrate = 2000000,
-        .mode = CAN_MODE_FD,
+        .arbitration_bitrate = 500000,
+        .data_bitrate =0,
+        .mode = CAN_MODE_NORMAL,
         .listen_only = false,
     },
 };
@@ -28,7 +28,6 @@ static const app_setup_can_config_t can_config = {
 
 void app_main(void)
 {
-    
     vTaskDelay(pdMS_TO_TICKS(1000));
     ESP_ERROR_CHECK(nvs_flash_init());
     esp_log_level_set("esp_twai", ESP_LOG_WARN);

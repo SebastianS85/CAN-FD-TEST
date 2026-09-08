@@ -76,6 +76,8 @@ TCP_PACKET_HEADER_FORMAT = "<BH"
 TCP_PACKET_TYPE_CAN_FRAME = 1
 TCP_PACKET_TYPE_CAN_CONTROL = 2
 TCP_PACKET_TYPE_MODE_CONTROL = 4
+TCP_PACKET_TYPE_BRIDGE_ID_MANIP = 5
+BRIDGE_ID_MANIP_FORMAT = "<IBBIIB64s"
 APP_MODE_QUERY_ONLY = 0xFF
 APP_DISPLAY_MODE_BRIDGE = 0
 APP_DISPLAY_MODE_SD_LOGGER = 1
@@ -104,7 +106,11 @@ TRANSLATIONS = {
         "mode_group": "Wybór trybu pracy (zdalny)", "mode_bridge": "Most CAN", "mode_sd": "Logger SD", "mode_tcp": "Serwer TCP",
         "btn_set_mode": "Ustaw tryb", "btn_query_mode": "Odpytaj tryb",
         "mode_remote_on": "Zdalna zmiana trybu: WŁĄCZONA", "mode_remote_off": "Zdalna zmiana trybu: WYŁĄCZONA (ustaw ostatni przełącznik DIP)",
-        "mode_current": "Aktualny tryb: {}", "msg_mode_rejected": "ESP32 odrzucił zmianę trybu (zdalna kontrola wyłączona lub błąd)."
+        "mode_current": "Aktualny tryb: {}", "msg_mode_rejected": "ESP32 odrzucił zmianę trybu (zdalna kontrola wyłączona lub błąd).",
+        "bridge_manip_group": "Manipulacja ID mostu (CAN1 -> CAN2, demo)", "bridge_manip_enable": "Włącz zamianę ramki",
+        "bridge_manip_filter_enable": "Tylko dla oryginalnego ID:", "bridge_manip_new_id": "Nowe CAN ID (Hex):", "bridge_manip_ext": "Extended ID",
+        "bridge_manip_data": "Nowe dane (Hex):",
+        "btn_apply_bridge_manip": "Zastosuj"
     },
     "EN": {
         "title": "ESP32 CAN-FD Analyzer", 
@@ -127,7 +133,11 @@ TRANSLATIONS = {
         "mode_group": "Operating Mode Selection (remote)", "mode_bridge": "CAN Bridge", "mode_sd": "SD Logger", "mode_tcp": "TCP Server",
         "btn_set_mode": "Set Mode", "btn_query_mode": "Query Mode",
         "mode_remote_on": "Remote mode control: ENABLED", "mode_remote_off": "Remote mode control: DISABLED (set last DIP switch)",
-        "mode_current": "Current mode: {}", "msg_mode_rejected": "ESP32 rejected the mode change (remote control disabled or error)."
+        "mode_current": "Current mode: {}", "msg_mode_rejected": "ESP32 rejected the mode change (remote control disabled or error).",
+        "bridge_manip_group": "Bridge Frame Replace (CAN1 -> CAN2, demo)", "bridge_manip_enable": "Enable frame replace",
+        "bridge_manip_filter_enable": "Only for original ID:", "bridge_manip_new_id": "New CAN ID (Hex):", "bridge_manip_ext": "Extended ID",
+        "bridge_manip_data": "New Data (Hex):",
+        "btn_apply_bridge_manip": "Apply"
     },
     "DE": {
         "title": "ESP32 CAN-FD Analyzer", 
@@ -150,7 +160,11 @@ TRANSLATIONS = {
         "mode_group": "Betriebsmodus-Auswahl (fernsteuerbar)", "mode_bridge": "CAN-Bridge", "mode_sd": "SD-Logger", "mode_tcp": "TCP-Server",
         "btn_set_mode": "Modus setzen", "btn_query_mode": "Modus abfragen",
         "mode_remote_on": "Fernsteuerung des Modus: AKTIV", "mode_remote_off": "Fernsteuerung des Modus: INAKTIV (letzten DIP-Schalter setzen)",
-        "mode_current": "Aktueller Modus: {}", "msg_mode_rejected": "ESP32 hat die Moduswechsel-Anfrage abgelehnt (Fernsteuerung deaktiviert oder Fehler)."
+        "mode_current": "Aktueller Modus: {}", "msg_mode_rejected": "ESP32 hat die Moduswechsel-Anfrage abgelehnt (Fernsteuerung deaktiviert oder Fehler).",
+        "bridge_manip_group": "Bridge-Frame-Ersatz (CAN1 -> CAN2, Demo)", "bridge_manip_enable": "Frame-Ersatz aktivieren",
+        "bridge_manip_filter_enable": "Nur für originale ID:", "bridge_manip_new_id": "Neue CAN ID (Hex):", "bridge_manip_ext": "Extended ID",
+        "bridge_manip_data": "Neue Daten (Hex):",
+        "btn_apply_bridge_manip": "Anwenden"
     }
 }
 
@@ -200,4 +214,13 @@ def len_to_dlc(length):
     elif length <= 32: return 13, 32
     elif length <= 48: return 14, 48
     else: return 15, 64
+
+def manipulate_can_id(can_id, set_bits=0, clear_bits=0, toggle_bits=0, extended=False):
+    """Demo-only: apply set/clear/toggle bitmasks to a CAN arbitration ID (used in bridge mode)."""
+    mask = 0x1FFFFFFF if extended else 0x7FF
+    result = can_id & mask
+    result &= ~clear_bits
+    result |= set_bits
+    result ^= toggle_bits
+    return result & mask
 

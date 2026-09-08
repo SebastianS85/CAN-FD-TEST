@@ -16,7 +16,10 @@
 #define TCP_PACKET_TYPE_CAN_FRAME 1U
 #define TCP_PACKET_TYPE_CAN_CONTROL 2U
 #define TCP_PACKET_TYPE_MODE_CONTROL 4U
+#define TCP_PACKET_TYPE_BRIDGE_ID_MANIP 5U
 #define APP_MODE_QUERY_ONLY 0xFFU
+/* Largest control payload the receiver has to buffer (covers udp_cmd_frame_t and bridge_frame_replace_command_t). */
+#define TCP_MAX_CONTROL_PAYLOAD 96U
 
 static tcp_service_config_t s_cfg = {0};
 
@@ -191,12 +194,12 @@ static void tcp_receiver_task(void *pvParameters)
         while (1) {
             tcp_packet_header_t header;
             if (!receive_all(sock, &header, sizeof(header))) break;
-            if (header.payload_size > sizeof(udp_cmd_frame_t)) {
+            if (header.payload_size > TCP_MAX_CONTROL_PAYLOAD) {
                 ESP_LOGW("TCP_RX", "Discarded oversized TCP command");
                 break;
             }
 
-            uint8_t payload[sizeof(udp_cmd_frame_t)];
+            uint8_t payload[TCP_MAX_CONTROL_PAYLOAD];
             if (!receive_all(sock, payload, header.payload_size)) break;
 
             if (header.type == TCP_PACKET_TYPE_CAN_CONTROL &&
@@ -220,6 +223,27 @@ static void tcp_receiver_task(void *pvParameters)
                         ESP_LOGE("TCP_RX", "CAN %u configuration failed: %s", command.node_id,
                                  esp_err_to_name(err));
                     }
+                }
+                if (!send_all(sock, &response, sizeof(response))) break;
+                continue;
+            }
+
+            if (header.type == TCP_PACKET_TYPE_BRIDGE_ID_MANIP &&
+                header.payload_size == sizeof(bridge_frame_replace_command_t)) {
+                bridge_frame_replace_command_t command;
+                memcpy(&command, payload, sizeof(command));
+                uint8_t response = 1;
+                if (command.magic != TCP_CAN_CONTROL_MAGIC) {
+                    ESP_LOGW("TCP_RX", "Discarded invalid bridge frame replace command");
+                } else {
+                    can_services_set_bridge_frame_replace(command.enabled != 0, command.filter_enabled != 0,
+                                                          command.filter_id, command.new_id, command.new_dlc,
+                                                          command.new_data, sizeof(command.new_data));
+                    response = 0;
+                    ESP_LOGI("TCP_RX", "Bridge frame replace %s (filter=%s 0x%08lX new_id=0x%08lX dlc=%u)",
+                             command.enabled ? "enabled" : "disabled",
+                             command.filter_enabled ? "on" : "off",
+                             (unsigned long)command.filter_id, (unsigned long)command.new_id, command.new_dlc);
                 }
                 if (!send_all(sock, &response, sizeof(response))) break;
                 continue;

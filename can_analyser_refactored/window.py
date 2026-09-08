@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QCheckBox, QLineEdit, QComboBox, QMessageBox, QTabWidget,
     QFileDialog, QGroupBox, QFormLayout, QScrollArea, QFrame
 )
-from .constants import APP_DISPLAY_MODE_BRIDGE, APP_DISPLAY_MODE_SD_LOGGER, APP_DISPLAY_MODE_TCP_SERVER, CAN_CONFIG_MAGIC, CAN_CONTROL_FORMAT, CANTOOLS_AVAILABLE, CHARTS_AVAILABLE, FRAME_SIZE, HEADER_FORMAT, TCP_PACKET_HEADER_FORMAT, TCP_PACKET_TYPE_CAN_CONTROL, TCP_PACKET_TYPE_CAN_FRAME, TCP_PACKET_TYPE_MODE_CONTROL, QCheckBox, QColor, QComboBox, QFileDialog, QFont, QFormLayout, QFrame, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPainter, QPointF, QPushButton, QRegularExpression, QRegularExpressionValidator, QScrollArea, QTabWidget, QTableView, QTableWidget, QTableWidgetItem, QTimer, QVBoxLayout, QWidget, Qt, TCP_IP, TCP_PORT, TRANSLATIONS, csv, deque, len_to_dlc, logging, os, save_config, struct
+from .constants import APP_DISPLAY_MODE_BRIDGE, APP_DISPLAY_MODE_SD_LOGGER, APP_DISPLAY_MODE_TCP_SERVER, BRIDGE_ID_MANIP_FORMAT, CAN_CONFIG_MAGIC, CAN_CONTROL_FORMAT, CANTOOLS_AVAILABLE, CHARTS_AVAILABLE, FRAME_SIZE, HEADER_FORMAT, TCP_PACKET_HEADER_FORMAT, TCP_PACKET_TYPE_BRIDGE_ID_MANIP, TCP_PACKET_TYPE_CAN_CONTROL, TCP_PACKET_TYPE_CAN_FRAME, TCP_PACKET_TYPE_MODE_CONTROL, QCheckBox, QColor, QComboBox, QFileDialog, QFont, QFormLayout, QFrame, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPainter, QPointF, QPushButton, QRegularExpression, QRegularExpressionValidator, QScrollArea, QTabWidget, QTableView, QTableWidget, QTableWidgetItem, QTimer, QVBoxLayout, QWidget, Qt, TCP_IP, TCP_PORT, TRANSLATIONS, csv, deque, len_to_dlc, logging, os, save_config, struct
 
 if CANTOOLS_AVAILABLE:
     from .constants import cantools
@@ -433,6 +433,32 @@ class CANViewerFullWindow(QMainWindow):
         for mode_value in (APP_DISPLAY_MODE_BRIDGE, APP_DISPLAY_MODE_SD_LOGGER, APP_DISPLAY_MODE_TCP_SERVER):
             self.mode_combo.addItem("", mode_value)
 
+        self.bridge_manip_group = QGroupBox()
+        bridge_manip_layout = QFormLayout(self.bridge_manip_group)
+        self.bridge_manip_enable_cb = QCheckBox()
+        bridge_manip_layout.addRow(self.bridge_manip_enable_cb)
+        self.bridge_manip_filter_enable_cb = QCheckBox()
+        self.bridge_manip_filter_id_input = QLineEdit("0x000")
+        filter_layout = QHBoxLayout()
+        filter_layout.addWidget(self.bridge_manip_filter_enable_cb)
+        filter_layout.addWidget(self.bridge_manip_filter_id_input)
+        self.lbl_bridge_manip_filter = QLabel()
+        bridge_manip_layout.addRow(self.lbl_bridge_manip_filter, filter_layout)
+        self.bridge_manip_new_id_input = QLineEdit("0x000")
+        self.bridge_manip_ext_id_cb = QCheckBox()
+        new_id_layout = QHBoxLayout()
+        new_id_layout.addWidget(self.bridge_manip_new_id_input)
+        new_id_layout.addWidget(self.bridge_manip_ext_id_cb)
+        self.bridge_manip_data_input = QLineEdit("00 00 00 00 00 00 00 00")
+        self.lbl_bridge_manip_new_id = QLabel()
+        self.lbl_bridge_manip_data = QLabel()
+        bridge_manip_layout.addRow(self.lbl_bridge_manip_new_id, new_id_layout)
+        bridge_manip_layout.addRow(self.lbl_bridge_manip_data, self.bridge_manip_data_input)
+        self.bridge_manip_apply_btn = QPushButton()
+        self.bridge_manip_apply_btn.clicked.connect(self.send_bridge_id_manip_settings)
+        bridge_manip_layout.addRow(self.bridge_manip_apply_btn)
+        can_settings_layout.addWidget(self.bridge_manip_group)
+
         can_settings_layout.addStretch()
 
         sniffer_tab = QWidget()
@@ -800,6 +826,13 @@ class CANViewerFullWindow(QMainWindow):
         self.mode_current_label.setText(
             t["mode_current"].format(mode_labels.get(current_mode, "-"))
         )
+        self.bridge_manip_group.setTitle(t["bridge_manip_group"])
+        self.bridge_manip_enable_cb.setText(t["bridge_manip_enable"])
+        self.lbl_bridge_manip_filter.setText(t["bridge_manip_filter_enable"])
+        self.lbl_bridge_manip_new_id.setText(t["bridge_manip_new_id"])
+        self.bridge_manip_ext_id_cb.setText(t["bridge_manip_ext"])
+        self.lbl_bridge_manip_data.setText(t["bridge_manip_data"])
+        self.bridge_manip_apply_btn.setText(t["btn_apply_bridge_manip"])
         self.form_group.setTitle(t["tab_gen"])
         self.can1_settings_group.setTitle("CAN 1")
         self.can2_settings_group.setTitle("CAN 2")
@@ -860,6 +893,30 @@ class CANViewerFullWindow(QMainWindow):
                 self,
                 self.get_t("msg_net_err"),
                 "ESP32 did not confirm the CAN configuration. Rebuild and flash the latest firmware."
+            )
+
+    def send_bridge_id_manip_settings(self):
+        try:
+            filter_id = int(self.bridge_manip_filter_id_input.text().strip().replace("0x", ""), 16)
+            new_id = int(self.bridge_manip_new_id_input.text().strip().replace("0x", ""), 16)
+            if self.bridge_manip_ext_id_cb.isChecked(): new_id |= 0x80000000
+            clean_hex = self.bridge_manip_data_input.text().replace(" ", "").replace("0x", "")
+            new_data = bytes.fromhex(clean_hex) if clean_hex else b""
+            if len(new_data) > 64: new_data = new_data[:64]
+            new_dlc, _ = len_to_dlc(len(new_data))
+        except ValueError:
+            QMessageBox.critical(self, self.get_t("msg_err"), "Invalid hex value.")
+            return
+        command = struct.pack(BRIDGE_ID_MANIP_FORMAT, CAN_CONFIG_MAGIC,
+                      1 if self.bridge_manip_enable_cb.isChecked() else 0,
+                      1 if self.bridge_manip_filter_enable_cb.isChecked() else 0,
+                      filter_id, new_id, new_dlc, new_data.ljust(64, b'\x00'))
+        payload = struct.pack(TCP_PACKET_HEADER_FORMAT, TCP_PACKET_TYPE_BRIDGE_ID_MANIP, len(command)) + command
+        if not self.tcp_thread.send_tcp_control_command(payload):
+            QMessageBox.critical(
+                self,
+                self.get_t("msg_net_err"),
+                "ESP32 did not confirm the bridge ID manipulation settings. Rebuild and flash the latest firmware."
             )
 
     def apply_mode_response(self, result):

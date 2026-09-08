@@ -155,6 +155,45 @@ static void twai_health_task(void *pvParameters) {
     }
 }
 
+/* Optional demo-only CAN1 -> CAN2 bridge frame replacement, configurable remotely over TCP. */
+static portMUX_TYPE s_bridge_manip_lock = portMUX_INITIALIZER_UNLOCKED;
+static bool s_frame_replace_enabled = false;
+static bool s_frame_replace_filter_enabled = false;
+static uint32_t s_frame_replace_filter_id = 0;
+static uint32_t s_frame_replace_new_id = 0;
+static uint8_t s_frame_replace_dlc = 0;
+static uint8_t s_frame_replace_data[64] = {0};
+
+void can_services_set_bridge_frame_replace(bool enabled, bool filter_enabled, uint32_t filter_id,
+                                           uint32_t new_id, uint8_t new_dlc,
+                                           const uint8_t *new_data, size_t new_data_len)
+{
+    size_t copy_len = new_data_len > sizeof(s_frame_replace_data) ? sizeof(s_frame_replace_data) : new_data_len;
+    taskENTER_CRITICAL(&s_bridge_manip_lock);
+    s_frame_replace_enabled = enabled;
+    s_frame_replace_filter_enabled = filter_enabled;
+    s_frame_replace_filter_id = filter_id;
+    s_frame_replace_new_id = new_id;
+    s_frame_replace_dlc = new_dlc;
+    memset(s_frame_replace_data, 0, sizeof(s_frame_replace_data));
+    memcpy(s_frame_replace_data, new_data, copy_len);
+    taskEXIT_CRITICAL(&s_bridge_manip_lock);
+}
+
+/* Overwrites the frame in-place with the configured replacement, if enabled and the filter matches. */
+static void demo_apply_frame_replace(log_frame_t *frame) {
+    taskENTER_CRITICAL(&s_bridge_manip_lock);
+    bool enabled = s_frame_replace_enabled;
+    bool filter_enabled = s_frame_replace_filter_enabled;
+    uint32_t filter_id = s_frame_replace_filter_id;
+    if (enabled && (!filter_enabled || (frame->id & 0x1FFFFFFFU) == filter_id)) {
+        frame->id = s_frame_replace_new_id;
+        frame->dlc = s_frame_replace_dlc;
+        memcpy(frame->data, s_frame_replace_data, sizeof(frame->data));
+    }
+    taskEXIT_CRITICAL(&s_bridge_manip_lock);
+}
+
 static void can_routing_task(void *pvParameters) {
     size_t item_size;
     while (1) {
@@ -163,6 +202,8 @@ static void can_routing_task(void *pvParameters) {
             log_frame_t route_frame;
             memcpy(&route_frame, data, sizeof(route_frame));
             vRingbufferReturnItem(s_cfg.route_ringbuf, data);
+
+            demo_apply_frame_replace(&route_frame);
 
             if (!s_cfg.route_target->recovery_in_progress) {
                 uint8_t safe_dlc = twai_mgr_bound_dlc(route_frame.dlc);

@@ -39,5 +39,8 @@ twai_mgr_inst_t *can_services_get_node(uint8_t node_id);
 esp_err_t can_services_reconfigure_node(uint8_t node_id, uint32_t arbitration_bitrate,
                                         uint32_t data_bitrate, bool listen_only);
 void can_services_rx_handler(uint8_t node_id, const twai_frame_t *rx_frame, void *user_ctx);
+void can_services_set_bridge_frame_replace(bool enabled, bool filter_enabled, uint32_t filter_id,
+                                           uint32_t new_id, uint8_t new_dlc,
+                                           const uint8_t *new_data, size_t new_data_len);
 
 #endif 
