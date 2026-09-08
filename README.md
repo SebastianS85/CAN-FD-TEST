@@ -1,5 +1,11 @@
 # ESP32-C5 Dual Isolated CAN FD Gateway
 
+## Hardware Availability
+
+The first batch of the ESP32-C5 Dual Isolated CAN-FD board is available for purchase at the following stores:
+*   [Get it on Lectronz](https://lectronz.com/products/esp32-c5-dual-isolated-can-fd-board-first-batch)
+*   [Get it on Tindie](https://www.tindie.com/products/smuqdev/esp32-c5-dual-isolated-can-fd-board-first-batch/)
+
 An ESP-IDF application for the ESP32-C5 that acts as a versatile dual-channel CAN FD tool. It utilizes two on-chip TWAI-FD controllers and features **three dynamic, hardware-selectable operating modes**: a standalone CAN 1 ↔ CAN 2 bridge, an offline SD card logger, or a Wi-Fi TCP server for real-time PC analysis.
 
 The firmware also provides an I2C OLED status panel, DS3231MZ RTC timekeeping, PCF8574-based DIP switch mode selection with LED indicators, and hardware-safe SD card unmounting. The host-side utilities include a high-performance GUI converter (`can_converter.py`) that exports raw logs directly to Vector ASC format for **SavvyCAN**.
@@ -82,6 +88,7 @@ At boot, the ESP32-C5 reads the PCF8574 P0-P2 pins. Only **one** mode is activat
 
 1.  **Bridge Mode (P0 ON):**
     Passes CAN frames bidirectionally between CAN 1 and CAN 2. The OLED displays bridging statistics. The network and SD card are disabled to maximize routing speed.
+    Optionally, a remote PC can enable **Bridge Frame Replace** (demo feature, disabled by default): frames routed from CAN 1 to CAN 2 can be fully substituted with a custom ID/DLC/data, either for every frame or only for frames matching a chosen original ID. Configured live over the TCP control port (see below).
 2.  **SD Logger Mode (P1 ON):**
     Logs all CAN traffic from both nodes to a raw `.bin` file on the SD card. The filename is generated using the DS3231MZ RTC (e.g., `log_20260829_174959.bin`).
     **Safe Eject:** Pressing the button on GPIO28 flushes the remaining buffer, cleanly unmounts the FAT filesystem, and shows "Safe to remove!" on the OLED.
@@ -108,10 +115,21 @@ The socket payload is a 74-byte packed binary structure formatted as follows (`<
 | `dlc` | 1 byte | CAN FD DLC code (0-15) |
 | `data` | 64 bytes | CAN payload storage; unused bytes are unspecified |
 
+### Remote Control Commands (RX Port, TCP Packet Header `<B H` = type + payload size)
+
+| `type` | Name | Payload struct | Purpose |
+| :---: | :--- | :--- | :--- |
+| `1` | `CAN_FRAME` | `<I B I B 64s` (`udp_cmd_frame_t`) | Inject a frame for immediate TX on a chosen node |
+| `2` | `CAN_CONTROL` | `<I B I I B` (`can_control_command_t`) | Reconfigure a node's arbitration/data bitrate and listen-only mode |
+| `4` | `MODE_CONTROL` | `<B` | Remotely switch operating mode (Bridge/SD Logger/TCP Server) |
+| `5` | `BRIDGE_ID_MANIP` | `<I B B I I B 64s` (`bridge_frame_replace_command_t`) | Enable/configure the Bridge Frame Replace demo feature |
+
+`bridge_frame_replace_command_t` fields: `magic`, `enabled`, `filter_enabled`, `filter_id` (original ID to match, only used when `filter_enabled`), `new_id` (bit 31 = extended), `new_dlc`, `new_data[64]`. Every control command replies with a single ack byte (`0` = accepted, `1` = rejected).
+
 ## Host-Side Utilities
 
 *   **`can_converter.py`**: A high-performance Python desktop application with a CustomTkinter GUI. It converts large raw `.bin` SD card logs into standard Vector ASCII (`.asc`) format. This format can be imported natively into **SavvyCAN** for reverse engineering and analysis. *Requires: `pip install python-can customtkinter`*.
-*   **`can_analyser.py`**: A Python script that connects to the ESP32 over TCP Wi-Fi for real-time monitoring.
+*   **`can_analyser_refactored/`**: A PyQt6 GUI application (`python can_analyser_refactored/main.py`) that connects to the ESP32 over TCP Wi-Fi for real-time monitoring, frame injection, remote CAN bitrate/mode control, and the Bridge Frame Replace demo (CAN Settings tab).
 
 ## Building and Flashing
 
@@ -142,15 +160,19 @@ Create `main/secrets.h` with your Wi-Fi credentials:
 ```
 main/                      Application entry point and core task routing
 components/twai_manager/   Reusable TWAI/TWAI-FD node manager and recovery
+components/can_services/   CAN node ownership, RX handling, bridge routing, and frame replace demo
+components/tcp_service/    TCP monitor stream and remote control command parsing
 components/c_oled/         SSD1306-style I2C OLED helper
 components/ds3231mz/       DS3231MZ RTC driver
 components/pcf8574/        PCF8574 I/O-expander driver (DIP + LEDs)
 components/sdcard_service/ SD-card service and FAT mounting
 can_converter.py           High-performance CustomTkinter GUI for SavvyCAN (.asc) conversion
-can_analyser.py            Host-side Python client for real-time TCP socket monitoring
+can_analyser_refactored/   PyQt6 host-side GUI: monitoring, TX generator, remote control, bridge frame replace
 partitions.csv             Custom partition layout for 3MB app size
 ```
 
-## Disclaimer
+##Python analyser
+![alt text](image.png)
 
+## Disclaimer
 This software is provided "as is", without warranty of any kind, express or implied. Use it at your own risk. The author takes no responsibility for any damage, data loss, hardware failure, or other issues that may result from using this project.
